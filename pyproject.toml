@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "helm-path"
+version = "0.1.0"
+description = "Dockerized Security Session Orchestrator & AI Report Generator"
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [
+    { name = "David", email = "your-email@example.com" }
+]
+dependencies = [
+    "typer[all]",
+    "docker",
+    "rich",
+    "python-dotenv",
+    "ollama",
+    "pypandoc"
+]
+
+[project.scripts]
+helm-path = "src.main:app"

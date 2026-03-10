@@ -1,0 +1,6 @@
+typer[all]
+docker
+rich
+python-dotenv
+ollama
+pypandoc
