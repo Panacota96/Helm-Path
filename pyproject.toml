@@ -21,4 +21,4 @@ dependencies = [
 ]
 
 [project.scripts]
-helm-path = "src.main:app"
+helm-path = "helm_path.main:app"
