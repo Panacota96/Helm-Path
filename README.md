@@ -1,17 +1,20 @@
-# Helm-Path 🚢🛠️
+# Helm-Path 🛡️👁️
 
-**Helm-Path** is a security-focused CLI tool that orchestrates Dockerized hacking environments ("The Helm"), captures every step of your execution ("The Path"), and transforms those logs into professional, AI-generated CTF write-ups ("The Write-up").
+**Helm-Path** is a security-focused CLI tool inspired by the D&D deity **Helm, the Watcher**. It is designed for those who value vigilance, protection, and the duty of the chronicler. It orchestrates isolated hacking environments (**The Helm**), records the journey of the agent (**The Watcher's Path**), and transforms those logs into professional, AI-generated CTF write-ups (**The Scribe of the Watcher**).
 
-## 🚀 Vision
-Built for CTF agents and cybersecurity educators, Helm-Path automates the tedious parts of documentation. By using a local AI model, it ensures that your sensitive exploitation logs stay on your machine while producing high-quality, academic-style reports.
+## 🛡️ The Mythology
+In the Forgotten Realms, **Helm** is the god of guardians, protection, and vigilance—the "Great Guard" who never sleeps. 
+- **The Helm (Vigilance):** Your environment is a fortified tower, isolated and secure.
+- **The Path (Duty):** Every command is a step in your vigil, recorded with the precision of a divine sentry.
+- **The Scribe (Knowledge):** The Scribe ensures that the lessons of the watch are never forgotten, crafting academic reports from raw experience.
 
 ---
 
 ## 🛠️ Features
-- **Isolated Helm:** Spin up customized Kali Linux or Exegol-style containers instantly.
-- **The Path (Logging):** Transparent, real-time command logging using the `script` utility.
-- **Scribe Engine (AI):** Uses local LLMs (via Ollama) to analyze terminal history and generate structured reports.
-- **Academic Structure:** Automatically generates Table of Contents, Overview, Task-by-Task breakdowns, and Conclusions.
+- **The Vigilant Helm:** Spin up customized Kali Linux or Exegol-style containers instantly.
+- **The Watcher's Path (Logging):** Transparent, real-time command logging using the `script` utility.
+- **The Scribe Engine (AI):** Uses local LLMs (via Ollama) to chronicle your terminal history into structured reports.
+- **Eternal Chronicle:** Automatically generates Table of Contents, Overview, Task-by-Task breakdowns, and Conclusions.
 
 ---
 
