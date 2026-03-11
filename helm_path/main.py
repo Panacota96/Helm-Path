@@ -9,7 +9,7 @@ import re
 import subprocess
 import hashlib
 from datetime import datetime
-from helm_path import db
+from helm_path import db, reptor_bridge
 
 # Heavy imports deferred for speed
 docker = None
@@ -327,7 +327,9 @@ def verify(session_id: str = typer.Argument(None, help="The Vigil ID to verify (
 def report(
     session_id: str = typer.Argument(..., help="The Vigil ID to chronicle"),
     model: str = typer.Option("llama3", help="AI Oracle name (Ollama model)"),
-    format: str = typer.Option("markdown", help="Chronicle output format (markdown or pdf)")
+    format: str = typer.Option("markdown", help="Chronicle output format (markdown or pdf)"),
+    sysreptor: bool = typer.Option(False, "--sysreptor", help="Export the finding to SysReptor"),
+    project_id: str = typer.Option(None, "--project-id", help="Target SysReptor Project ID")
 ):
     """
     Summons the Scribe to generate an AI chronicle from the Watcher's Path.
@@ -347,10 +349,16 @@ def report(
         console.print(f"[bold red]The Path is empty for vigil '{session_id}'.[/bold red]")
         return
 
+    if sysreptor and not reptor_bridge.is_reptor_available():
+        console.print("[bold red]Error:[/bold red] SysReptor CLI ('reptor') is not installed.")
+        console.print("[dim]Run 'pip install reptor' and 'reptor conf' to set it up.[/dim]")
+        return
+
     console.print(Panel(
         f"✍️ [bold yellow]Scribe of the Watcher:[/bold yellow] Chronicling Experience\n"
         f"📘 [bold blue]Vigil:[/bold blue] {session_id}\n"
-        f"🔮 [bold magenta]Oracle Model:[/bold magenta] {model}", 
+        f"🔮 [bold magenta]Oracle Model:[/bold magenta] {model}" + 
+        (f"\n🦖 [bold cyan]Target:[/bold cyan] SysReptor" if sysreptor else ""), 
         expand=False,
         border_style="blue"
     ))
@@ -372,39 +380,90 @@ def report(
 
     try:
         processed_path = summarize_path_if_needed(all_logs_content, model=model)
+        
         with console.status(f"[bold magenta]Consulting the Oracle ({model})...[/bold magenta]"):
-            prompt = f"""
-            You are the Scribe of the Watcher, inspired by the deity Helm. 
-            Analyze the following terminal session logs (The Watcher's Path) and generate a professional, academic CTF write-up.
-            Structure: TOC, Overview, Task Sets, Conclusion. Academic tone.
-            VIGIL: {session_id}
-            PATH DATA: {processed_path}
-            """
+            if sysreptor:
+                prompt = f"""
+                You are the Scribe of the Watcher. Analyze the terminal logs and generate a structured SysReptor finding in JSON format.
+                
+                The JSON MUST follow this exact structure:
+                {{
+                  "status": "open",
+                  "data": {{
+                    "title": "Vigil Security Assessment: {session_id}",
+                    "summary": "Brief summary of the session findings.",
+                    "description": "Detailed Markdown description of the actions and observed vulnerabilities.",
+                    "recommendation": "Security recommendations based on the findings.",
+                    "cvss": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:L/I:L/A:N"
+                  }}
+                }}
+                
+                Ensure the description is high-quality Markdown. Estimate a CVSS score if vulnerabilities are found.
+                Output ONLY the raw JSON. No Markdown code blocks.
+                
+                PATH DATA:
+                {processed_path}
+                """
+            else:
+                prompt = f"""
+                You are the Scribe of the Watcher, inspired by the deity Helm. 
+                Analyze the following terminal session logs (The Watcher's Path) and generate a professional, academic CTF write-up.
+                Structure: TOC, Overview, Task Sets, Conclusion. Academic tone.
+                VIGIL: {session_id}
+                PATH DATA: {processed_path}
+                """
+            
             response = oracle.chat(model=model, messages=[
                 {'role': 'system', 'content': 'You are the Scribe of Helm, chronicling security deeds with precision.'},
                 {'role': 'user', 'content': prompt},
             ])
-            report_content = response['message']['content']
+            content = response['message']['content']
             
-            report_file = os.path.join(session_path, "WRITEUP.md")
-            with open(report_file, "w", encoding="utf-8") as f:
-                f.write(report_content)
-            
-            os.makedirs(WRITEUPS_DIR, exist_ok=True)
-            global_report_file = os.path.join(WRITEUPS_DIR, f"{session_id}_WRITEUP.md")
-            with open(global_report_file, "w", encoding="utf-8") as f:
-                f.write(report_content)
-            
-            if format == "pdf":
+            if sysreptor:
+                # Clean up JSON if AI included code blocks
+                json_str = content.strip()
+                if json_str.startswith("```json"):
+                    json_str = json_str.replace("```json", "", 1)
+                if json_str.endswith("```"):
+                    json_str = json_str.rsplit("```", 1)[0]
+                
                 try:
-                    pandoc = get_pypandoc()
-                    pdf_file = os.path.join(WRITEUPS_DIR, f"{session_id}_WRITEUP.pdf")
-                    pandoc.convert_text(report_content, 'pdf', format='md', outputfile=pdf_file)
-                    console.print(f"📜 [bold yellow]PDF Chronicled at:[/bold yellow] [yellow]{pdf_file}[/yellow]")
-                except Exception as pdf_err:
-                    console.print(f"[bold red]PDF Forging Failed:[/bold red] {str(pdf_err)}")
+                    finding_data = json.loads(json_str.strip())
+                    # Save local copy
+                    with open(os.path.join(session_path, "finding.json"), "w") as f:
+                        json.dump(finding_data, f, indent=4)
+                    
+                    # Push to SysReptor
+                    reptor_bridge.push_finding(finding_data, project_id=project_id)
+                    
+                    # Upload logs as evidence
+                    for log_entry in metadata["logs"]:
+                        log_file = os.path.join(session_path, log_entry["file"])
+                        reptor_bridge.upload_evidence(log_file, project_id=project_id)
+                        
+                except json.JSONDecodeError:
+                    console.print("[bold red]Error:[/bold red] AI failed to generate valid JSON for SysReptor.")
+                    console.print(f"[dim]Raw content:[/dim]\n{content}")
+            else:
+                report_file = os.path.join(session_path, "WRITEUP.md")
+                with open(report_file, "w", encoding="utf-8") as f:
+                    f.write(content)
+                
+                os.makedirs(WRITEUPS_DIR, exist_ok=True)
+                global_report_file = os.path.join(WRITEUPS_DIR, f"{session_id}_WRITEUP.md")
+                with open(global_report_file, "w", encoding="utf-8") as f:
+                    f.write(content)
+                
+                if format == "pdf":
+                    try:
+                        pandoc = get_pypandoc()
+                        pdf_file = os.path.join(WRITEUPS_DIR, f"{session_id}_WRITEUP.pdf")
+                        pandoc.convert_text(content, 'pdf', format='md', outputfile=pdf_file)
+                        console.print(f"📜 [bold yellow]PDF Chronicled at:[/bold yellow] [yellow]{pdf_file}[/yellow]")
+                    except Exception as pdf_err:
+                        console.print(f"[bold red]PDF Forging Failed:[/bold red] {str(pdf_err)}")
 
-            console.print(f"🏆 [bold yellow]Vigil Complete! Final chronicle preserved at:[/bold yellow] [yellow]{global_report_file}[/yellow]")
+                console.print(f"🏆 [bold yellow]Vigil Complete! Final chronicle preserved at:[/bold yellow] [yellow]{global_report_file}[/yellow]")
     except Exception as e:
         console.print(f"[bold red]AI Generation Failed:[/bold red] {str(e)}")
 
