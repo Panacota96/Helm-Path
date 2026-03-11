@@ -9,6 +9,7 @@ import re
 import subprocess
 import hashlib
 from datetime import datetime
+from helm_path import db
 
 # Heavy imports deferred for speed
 docker = None
@@ -67,6 +68,9 @@ def main_callback(
     VERBOSE_MODE = verbose
     if VERBOSE_MODE:
         console.print("[dim]🔍 Verbose mode enabled. The Watcher's eye is wider.[/dim]")
+    
+    # Initialize the Tamper-Evident Database
+    db.init_db()
 
 def load_metadata(session_path):
     meta_file = os.path.join(session_path, "metadata.json")
@@ -183,17 +187,15 @@ def start(
     
     dockerfile = "docker/Dockerfile.lite" if lite else "docker/Dockerfile.kali"
     
+    # Use timestamp for session naming if not provided
+    timestamp = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
     if not session_name:
-        session_name = f"vigil_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+        session_name = f"vigil_{timestamp}"
     
     session_path = os.path.abspath(os.path.join(SESSION_DIR, session_name))
     os.makedirs(session_path, exist_ok=True)
     
     metadata = load_metadata(session_path)
-    if metadata["is_complete"]:
-        console.print(f"[bold yellow]⚠️ This vigil was previously marked as complete.[/bold yellow]")
-        if not Confirm.ask("Do you wish to reopen this chronicle and add more to your path?"):
-            return
 
     try:
         # Check for image
@@ -203,7 +205,6 @@ def start(
                 console.print(f"👁️ [dim]Image '{image_tag}' found locally.[/dim]")
         except docker.errors.ImageNotFound:
             if not os.path.exists(dockerfile):
-                 # Fallback to standard if lite is missing but requested
                  if lite:
                      console.print("⚠️ [yellow]Lite Dockerfile not found. Falling back to Kali standard...[/yellow]")
                      dockerfile = "docker/Dockerfile.kali"
@@ -213,14 +214,12 @@ def start(
             client.images.build(path=".", dockerfile=dockerfile, tag=image_tag)
             console.print(f"✅ [bold green]Helm forged successfully.[/bold green]")
 
-        # Prepare unique log for this part
-        metadata["total_vigils"] += 1
-        part_num = metadata["total_vigils"]
-        log_filename = f"path_part_{part_num}.log"
+        log_filename = f"session_{timestamp}.log"
         start_time = datetime.now().isoformat()
         
         console.print(Panel(
-            f"🛡️ [bold yellow]The Vigil Commences:[/bold yellow] {session_name} (Part {part_num})\n"
+            f"🛡️ [bold yellow]The Vigil Commences:[/bold yellow] {session_name}\n"
+            f"👤 [bold magenta]Identity:[/bold magenta] Durk (sudoer)\n"
             f"📘 [bold cyan]Chronicle mapping:[/bold cyan] {session_path} -> /helm-path", 
             title=f"[bold blue]Helm-Path: {'Lite' if lite else 'Full'} Vigil[/bold blue]", 
             expand=False,
@@ -229,7 +228,7 @@ def start(
 
         env_vars = {f"LOG_FILE": log_filename}
         if no_record:
-            env_vars["SCRIPT_LOGGED"] = "1" # Bypass script recording in .zshrc
+            env_vars["SCRIPT_LOGGED"] = "1"
             console.print("[bold red]⚠️  RECORDING DISABLED: This session will not be chronicled.[/bold red]")
         else:
             console.print("[bold green]🔴 RECORDING ACTIVE: All terminal output is being logged for the chronicle.[/bold green]")
@@ -238,11 +237,10 @@ def start(
         docker_command = [
             "docker", "run", "-it", "--rm",
             "-v", f"{session_path}:/helm-path",
-            "--name", f"{session_name}_part_{part_num}",
+            "--name", f"{session_name}_{timestamp}",
             image_tag
         ]
         
-        # Add env vars to command
         for k, v in env_vars.items():
             docker_command.insert(2, "-e")
             docker_command.insert(3, f"{k}={v}")
@@ -251,7 +249,6 @@ def start(
         
         end_time = datetime.now().isoformat()
         
-        # Log this part in metadata
         log_entry = {
             "file": log_filename,
             "start_time": start_time,
@@ -265,28 +262,20 @@ def start(
                 log_entry["integrity_hash"] = file_hash
                 if VERBOSE_MODE:
                     console.print(f"🔒 [dim]Log Integrity Hash:[/dim] {file_hash}")
+                
+                # Insert into Tamper-Evident Database
+                chain_hash = db.insert_session(session_name, start_time, end_time, file_hash, json.dumps(metadata))
+                console.print(f"🔗 [bold green]Audit Chain Secured:[/bold green] {chain_hash[:16]}...")
         
         metadata["logs"].append(log_entry)
-        
-        console.print(f"\n✅ [bold yellow]The current vigil has paused.[/bold yellow]")
-        
-        # Ask if complete
-        is_complete = Confirm.ask("Is this vigil complete? (If yes, the Scribe can now create the final chronicle)")
-        if is_complete:
-            metadata["is_complete"] = True
-            console.print(f"🛡️ [bold green]The Chronicle of {session_name} is marked as complete.[/bold green]")
-        else:
-            metadata["is_complete"] = False
-            console.print(f"👁️ [bold blue]The Watcher remains vigilant. The path will continue later.[/bold blue]")
-
+        metadata["is_complete"] = True
         save_metadata(session_path, metadata)
         
-        if is_complete and auto_report and not no_record:
+        console.print(f"\n✅ [bold yellow]Vigil Concluded.[/bold yellow]")
+        
+        if auto_report and not no_record:
             console.print(f"📜 [bold cyan]Auto-Report active. Summoning the Scribe...[/bold cyan]")
-            # Direct call to the report logic
             report(session_id=session_name)
-        elif no_record and auto_report:
-             console.print(f"⚠️ [bold yellow]Auto-Report skipped: Recording was disabled.[/bold yellow]")
         else:
             console.print(f"✍️ Run [bold blue]helm-path report {session_name}[/bold blue] whenever you are ready.")
 
@@ -294,17 +283,28 @@ def start(
         console.print(f"[bold red]Desecration (Error):[/bold red] {str(e)}")
 
 @app.command()
-def verify(session_id: str):
+def verify(session_id: str = typer.Argument(None, help="The Vigil ID to verify (optional, verifies the whole chain if omitted)")):
     """
-    Verifies the integrity of the session logs using stored SHA-256 hashes.
+    Verifies the integrity of the audit log chain and session logs.
     """
+    console.print("🔍 [bold]Verifying Cryptographic Audit Chain...[/bold]")
+    is_valid, message = db.verify_chain()
+    if is_valid:
+        console.print(f"  ✅ [green]{message}[/green]")
+    else:
+        console.print(f"  🚨 [bold red]{message}[/bold red]")
+        return
+
+    if not session_id:
+        return
+
     session_path = os.path.join(SESSION_DIR, session_id)
     if not os.path.exists(session_path):
         console.print(f"[bold red]Error:[/bold red] Vigil '{session_id}' not found.")
         return
 
     metadata = load_metadata(session_path)
-    console.print(f"🔍 Verifying integrity for Vigil: [bold]{session_id}[/bold]")
+    console.print(f"\n🔍 Verifying File Integrity for Vigil: [bold]{session_id}[/bold]")
 
     all_valid = True
     for log in metadata["logs"]:
@@ -317,13 +317,11 @@ def verify(session_id: str):
             else:
                 console.print(f"  ❌ {log['file']}: [bold red]MODIFIED[/bold red] (Expected {log['integrity_hash'][:8]}..., got {current_hash[:8]}...)")
                 all_valid = False
-        else:
-            console.print(f"  ⚠️ {log['file']}: [yellow]NO HASH FOUND[/yellow] (Legacy log?)")
     
     if all_valid:
-        console.print("\n🛡️  [bold green]Integrity Check Passed: The Chronicle is untainted.[/bold green]")
+        console.print("\n🛡️  [bold green]File Integrity Check Passed.[/bold green]")
     else:
-        console.print("\n🚨 [bold red]Integrity Check Failed: Some logs have been altered![/bold red]")
+        console.print("\n🚨 [bold red]File Integrity Check Failed![/bold red]")
 
 @app.command()
 def report(
@@ -345,7 +343,6 @@ def report(
         return
 
     metadata = load_metadata(session_path)
-    
     if not metadata["logs"]:
         console.print(f"[bold red]The Path is empty for vigil '{session_id}'.[/bold red]")
         return
@@ -364,7 +361,6 @@ def report(
             log_file = os.path.join(session_path, log_entry["file"])
             cleaned = clean_log(log_file)
             if cleaned:
-                # Apply redaction
                 cleaned = clean_sensitive_data(cleaned)
                 all_logs_content += f"\n--- VIGIL START: {log_entry['start_time']} ---\n"
                 all_logs_content += cleaned
@@ -375,254 +371,56 @@ def report(
         return
 
     try:
-        # Handle large logs with summarization
         processed_path = summarize_path_if_needed(all_logs_content, model=model)
-
         with console.status(f"[bold magenta]Consulting the Oracle ({model})...[/bold magenta]"):
             prompt = f"""
             You are the Scribe of the Watcher, inspired by the deity Helm. 
             Analyze the following terminal session logs (The Watcher's Path) and generate a professional, academic CTF write-up.
-            
-            Structure the chronicle with the precision of a master guardian:
-            1. Table of Contents
-            2. Overview (Summary of the Vigil)
-            3. Task Sets (Chronicle each phase: Reconnaissance, Exploitation, Post-Exploitation, etc.)
-            4. Conclusion (Final thoughts and lessons of the guard)
-            
-            Use clean Markdown formatting. Focus on the commands executed and their outcomes.
-            Maintain an academic, serious, and vigilant tone.
-            
-            VIGIL METADATA:
-            - Session ID: {metadata['session_id']}
-            - Total Vigils: {metadata['total_vigils']}
-            - Created At: {metadata['created_at']}
-            
-            PATH DATA:
-            {processed_path}
+            Structure: TOC, Overview, Task Sets, Conclusion. Academic tone.
+            VIGIL: {session_id}
+            PATH DATA: {processed_path}
             """
-            
             response = oracle.chat(model=model, messages=[
-                {'role': 'system', 'content': 'You are the Scribe of Helm, chronicling the deeds of security agents with academic precision.'},
+                {'role': 'system', 'content': 'You are the Scribe of Helm, chronicling security deeds with precision.'},
                 {'role': 'user', 'content': prompt},
             ])
-            
             report_content = response['message']['content']
             
-            # Save to session dir
             report_file = os.path.join(session_path, "WRITEUP.md")
             with open(report_file, "w", encoding="utf-8") as f:
                 f.write(report_content)
-                
-            console.print(f"\n✅ [bold green]Chronicle created in session directory![/bold green]")
             
-            # Promotion to global writeups
-            if metadata["is_complete"]:
-                os.makedirs(WRITEUPS_DIR, exist_ok=True)
-                global_report_file = os.path.join(WRITEUPS_DIR, f"{session_id}_WRITEUP.md")
-                with open(global_report_file, "w", encoding="utf-8") as f:
-                    f.write(report_content)
-                
-                if format == "pdf":
-                    try:
-                        pandoc = get_pypandoc()
-                        with console.status("[bold blue]Forging the PDF Chronicle...[/bold blue]"):
-                            pdf_file = os.path.join(WRITEUPS_DIR, f"{session_id}_WRITEUP.pdf")
-                            pandoc.convert_text(report_content, 'pdf', format='md', outputfile=pdf_file)
-                            console.print(f"📜 [bold yellow]PDF Chronicled at:[/bold yellow] [yellow]{pdf_file}[/yellow]")
-                    except Exception as pdf_err:
-                        console.print(f"[bold red]PDF Forging Failed:[/bold red] {str(pdf_err)}")
-                        console.print("[dim]Ensure 'pandoc' and a LaTeX engine like 'pdflatex' are installed on your system.[/dim]")
+            os.makedirs(WRITEUPS_DIR, exist_ok=True)
+            global_report_file = os.path.join(WRITEUPS_DIR, f"{session_id}_WRITEUP.md")
+            with open(global_report_file, "w", encoding="utf-8") as f:
+                f.write(report_content)
+            
+            if format == "pdf":
+                try:
+                    pandoc = get_pypandoc()
+                    pdf_file = os.path.join(WRITEUPS_DIR, f"{session_id}_WRITEUP.pdf")
+                    pandoc.convert_text(report_content, 'pdf', format='md', outputfile=pdf_file)
+                    console.print(f"📜 [bold yellow]PDF Chronicled at:[/bold yellow] [yellow]{pdf_file}[/yellow]")
+                except Exception as pdf_err:
+                    console.print(f"[bold red]PDF Forging Failed:[/bold red] {str(pdf_err)}")
 
-                console.print(f"🏆 [bold yellow]Vigil Complete! Final chronicle preserved at:[/bold yellow] [yellow]{global_report_file}[/yellow]")
-            else:
-                console.print(f"📖 Partial chronicle preserved at: [yellow]{report_file}[/yellow]")
-
+            console.print(f"🏆 [bold yellow]Vigil Complete! Final chronicle preserved at:[/bold yellow] [yellow]{global_report_file}[/yellow]")
     except Exception as e:
         console.print(f"[bold red]AI Generation Failed:[/bold red] {str(e)}")
 
 @app.command()
 def list_sessions():
-    """
-    Lists all previous sessions and their status.
-    """
+    """Lists all previous sessions and their status."""
     if not os.path.exists(SESSION_DIR):
         console.print("[red]No sessions found.[/red]")
         return
-    
     sessions = os.listdir(SESSION_DIR)
     console.print("[bold blue]The Watcher's Archive:[/bold blue]")
     for s in sessions:
         s_path = os.path.join(SESSION_DIR, s)
         if os.path.isdir(s_path):
             metadata = load_metadata(s_path)
-            status = "[green]Complete[/green]" if metadata["is_complete"] else "[yellow]In Progress[/yellow]"
-            console.print(f" - {s} ({status}) | Vigils: {metadata['total_vigils']}")
-
-if __name__ == "__main__":
-    app()
-
-@app.command()
-def verify(session_id: str):
-    """
-    Verifies the integrity of the session logs using stored SHA-256 hashes.
-    """
-    session_path = os.path.join(SESSION_DIR, session_id)
-    if not os.path.exists(session_path):
-        console.print(f"[bold red]Error:[/bold red] Vigil '{session_id}' not found.")
-        return
-
-    metadata = load_metadata(session_path)
-    console.print(f"🔍 Verifying integrity for Vigil: [bold]{session_id}[/bold]")
-
-    all_valid = True
-    for log in metadata["logs"]:
-        if "integrity_hash" in log:
-            log_path = os.path.join(session_path, log["file"])
-            current_hash = calculate_file_hash(log_path)
-            
-            if current_hash == log["integrity_hash"]:
-                console.print(f"  ✅ {log['file']}: [green]VERIFIED[/green]")
-            else:
-                console.print(f"  ❌ {log['file']}: [bold red]MODIFIED[/bold red] (Expected {log['integrity_hash'][:8]}..., got {current_hash[:8]}...)")
-                all_valid = False
-        else:
-            console.print(f"  ⚠️ {log['file']}: [yellow]NO HASH FOUND[/yellow] (Legacy log?)")
-    
-    if all_valid:
-        console.print("\n🛡️  [bold green]Integrity Check Passed: The Chronicle is untainted.[/bold green]")
-    else:
-        console.print("\n🚨 [bold red]Integrity Check Failed: Some logs have been altered![/bold red]")
-
-@app.command()
-def report(
-    session_id: str = typer.Argument(..., help="The Vigil ID to chronicle"),
-    model: str = typer.Option("llama3", help="AI Oracle name (Ollama model)"),
-    format: str = typer.Option("markdown", help="Chronicle output format (markdown or pdf)")
-):
-    """
-    Summons the Scribe to generate an AI chronicle from the Watcher's Path.
-    """
-    session_path = os.path.join(SESSION_DIR, session_id)
-    if not os.path.exists(session_path):
-        console.print(f"[bold red]Error:[/bold red] Vigil '{session_id}' not found.")
-        return
-
-    metadata = load_metadata(session_path)
-    
-    if not metadata["logs"]:
-        console.print(f"[bold red]The Path is empty for vigil '{session_id}'.[/bold red]")
-        return
-
-    console.print(Panel(
-        f"✍️ [bold yellow]Scribe of the Watcher:[/bold yellow] Chronicling Experience\n"
-        f"📘 [bold blue]Vigil:[/bold blue] {session_id}\n"
-        f"🔮 [bold magenta]Oracle Model:[/bold magenta] {model}", 
-        expand=False,
-        border_style="blue"
-    ))
-
-    all_logs_content = ""
-    with console.status("[bold cyan]Sanitizing the Watcher's Path...[/bold cyan]"):
-        for log_entry in metadata["logs"]:
-            log_file = os.path.join(session_path, log_entry["file"])
-            cleaned = clean_log(log_file)
-            if cleaned:
-                # Apply redaction
-                cleaned = clean_sensitive_data(cleaned)
-                all_logs_content += f"\n--- VIGIL START: {log_entry['start_time']} ---\n"
-                all_logs_content += cleaned
-                all_logs_content += f"\n--- VIGIL END: {log_entry['end_time']} ---\n"
-
-    if not all_logs_content:
-        console.print("[red]The Chronicle is unreadable or empty.[/red]")
-        return
-
-    if not ollama:
-        console.print("[bold red]The Scribe is missing. Run 'pip install ollama'.[/bold red]")
-        return
-
-    try:
-        # Handle large logs with summarization
-        processed_path = summarize_path_if_needed(all_logs_content, model=model)
-
-        with console.status(f"[bold magenta]Consulting the Oracle ({model})...[/bold magenta]"):
-            prompt = f"""
-            You are the Scribe of the Watcher, inspired by the deity Helm. 
-            Analyze the following terminal session logs (The Watcher's Path) and generate a professional, academic CTF write-up.
-            
-            Structure the chronicle with the precision of a master guardian:
-            1. Table of Contents
-            2. Overview (Summary of the Vigil)
-            3. Task Sets (Chronicle each phase: Reconnaissance, Exploitation, Post-Exploitation, etc.)
-            4. Conclusion (Final thoughts and lessons of the guard)
-            
-            Use clean Markdown formatting. Focus on the commands executed and their outcomes.
-            Maintain an academic, serious, and vigilant tone.
-            
-            VIGIL METADATA:
-            - Session ID: {metadata['session_id']}
-            - Total Vigils: {metadata['total_vigils']}
-            - Created At: {metadata['created_at']}
-            
-            PATH DATA:
-            {processed_path}
-            """
-            
-            response = ollama.chat(model=model, messages=[
-                {'role': 'system', 'content': 'You are the Scribe of Helm, chronicling the deeds of security agents with academic precision.'},
-                {'role': 'user', 'content': prompt},
-            ])
-            
-            report_content = response['message']['content']
-            
-            # Save to session dir
-            report_file = os.path.join(session_path, "WRITEUP.md")
-            with open(report_file, "w", encoding="utf-8") as f:
-                f.write(report_content)
-                
-            console.print(f"\n✅ [bold green]Chronicle created in session directory![/bold green]")
-            
-            # Promotion to global writeups
-            if metadata["is_complete"]:
-                os.makedirs(WRITEUPS_DIR, exist_ok=True)
-                global_report_file = os.path.join(WRITEUPS_DIR, f"{session_id}_WRITEUP.md")
-                with open(global_report_file, "w", encoding="utf-8") as f:
-                    f.write(report_content)
-                
-                if format == "pdf":
-                    try:
-                        with console.status("[bold blue]Forging the PDF Chronicle...[/bold blue]"):
-                            pdf_file = os.path.join(WRITEUPS_DIR, f"{session_id}_WRITEUP.pdf")
-                            pypandoc.convert_text(report_content, 'pdf', format='md', outputfile=pdf_file)
-                            console.print(f"📜 [bold yellow]PDF Chronicled at:[/bold yellow] [yellow]{pdf_file}[/yellow]")
-                    except Exception as pdf_err:
-                        console.print(f"[bold red]PDF Forging Failed:[/bold red] {str(pdf_err)}")
-                        console.print("[dim]Ensure 'pandoc' and a LaTeX engine like 'pdflatex' are installed on your system.[/dim]")
-
-                console.print(f"🏆 [bold yellow]Vigil Complete! Final chronicle preserved at:[/bold yellow] [yellow]{global_report_file}[/yellow]")
-            else:
-                console.print(f"📖 Partial chronicle preserved at: [yellow]{report_file}[/yellow]")
-
-    except Exception as e:
-        console.print(f"[bold red]AI Generation Failed:[/bold red] {str(e)}")
-
-@app.command()
-def list_sessions():
-    """
-    Lists all previous sessions and their status.
-    """
-    if not os.path.exists(SESSION_DIR):
-        console.print("[red]No sessions found.[/red]")
-        return
-    
-    sessions = os.listdir(SESSION_DIR)
-    console.print("[bold blue]The Watcher's Archive:[/bold blue]")
-    for s in sessions:
-        s_path = os.path.join(SESSION_DIR, s)
-        if os.path.isdir(s_path):
-            metadata = load_metadata(s_path)
-            status = "[green]Complete[/green]" if metadata["is_complete"] else "[yellow]In Progress[/yellow]"
-            console.print(f" - {s} ({status}) | Vigils: {metadata['total_vigils']}")
+            console.print(f" - {s} | Created: {metadata['created_at']}")
 
 if __name__ == "__main__":
     app()
