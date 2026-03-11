@@ -1,0 +1,33 @@
+FROM kalilinux/kali-rolling
+
+# Avoid interactive prompts during build
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Update and install ONLY essential tools
+RUN apt-get update && apt-get install -y \
+    curl \
+    wget \
+    git \
+    vim \
+    zsh \
+    net-tools \
+    iputils-ping \
+    bsdutils \
+    nmap \
+    netcat-traditional \
+    python3 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Oh-My-Zsh for the Chronicler's interface
+RUN sh -c "$(curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh)" "" --unattended
+RUN chsh -s /usr/bin/zsh
+
+# Configure the Watcher's Path (Logging)
+WORKDIR /root
+RUN mkdir -p /helm-path
+RUN echo 'if [ -z "$SCRIPT_LOGGED" ]; then export SCRIPT_LOGGED=1; script -f -q /helm-path/${LOG_FILE:-session.log}; exit; fi' >> /root/.zshrc
+
+# Welcome Message
+RUN echo 'echo -e "\n\033[1;33m🛡️  The Watcher (Lite) is ready.\033[0m\n"' >> /root/.zshrc
+
+CMD ["/usr/bin/zsh"]
