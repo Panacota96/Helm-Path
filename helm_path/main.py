@@ -52,8 +52,9 @@ def get_pypandoc():
 
 VERSION = "0.1.0"
 
-@app.callback()
+@app.callback(invoke_without_command=True)
 def main_callback(
+    ctx: typer.Context,
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Enable verbose logging"),
     version: bool = typer.Option(False, "--version", "-V", help="Show the version and exit")
 ):
