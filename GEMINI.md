@@ -17,7 +17,6 @@ This project uses a `Makefile` and `deploy.sh` to handle installation and direct
 - **Ollama:** Required for AI report generation.
 - **Pandoc & LaTeX:** Required for PDF report generation.
 - **Python 3.10+**
-
 ### Installation Command
 To install the tool globally (and restructure the project to use a `src` layout):
 
@@ -25,7 +24,11 @@ To install the tool globally (and restructure the project to use a `src` layout)
 make deploy
 ```
 
-*Note: `deploy.sh` will check for dependencies, move `helm_path` to `src/helm_path` if it exists at the root, and install the package via pip.*
+## 🔇 Offline Reproducibility
+Helm-Path can be deployed in air-gapped environments by pre-caching assets:
+1. **Docker:** Use `docker save helm-path:lite > lite.tar` and `docker load` on the target.
+2. **Ollama:** Copy the `~/.ollama/models` folder to the target machine.
+3. **Python:** Use `pip download -r requirements.txt -d wheels` to bundle dependencies.
 
 ## Key Commands
 

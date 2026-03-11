@@ -23,10 +23,41 @@ In the Forgotten Realms, **Helm** is the god of guardians, protection, and vigil
 ---
 
 ## 📋 Prerequisites
-- **Docker:** Must be installed and running. (WSL 2 supported with Docker Desktop integration).
-- **Ollama:** Required for local AI report generation. [Download Ollama](https://ollama.ai/).
-- **Pandoc & LaTeX:** Required for PDF generation (e.g., `sudo apt install pandoc texlive-latex-base`).
+- **Docker:** Must be installed and running.
+- **Ollama:** Required for local AI report generation.
+- **Pandoc & LaTeX:** Required for PDF generation.
 - **Python 3.10+**
+
+---
+
+## 🔇 Vigilance in Silence: Offline Deployment
+Helm-Path is designed to respect the privacy of the air-gap. To reproduce the entire environment offline, follow these steps while connected to the internet to "pre-forge" your arsenal.
+
+### 1. Pre-download Docker Images
+Build the images locally and save them to tarballs:
+```bash
+# Build the images
+helm-path start --lite # (exit immediately)
+docker save helm-path:lite > helm-path-lite.tar
+docker save helm-path:kali > helm-path-kali.tar
+```
+*On the offline machine, run `docker load < helm-path-lite.tar`.*
+
+### 2. Pre-download Ollama Models
+Pull the required models while online:
+```bash
+ollama pull llama3
+# The models are stored in ~/.ollama/models. 
+# Copy this directory to the offline machine.
+```
+
+### 3. Pre-download Python Dependencies
+Download all wheels to a local directory:
+```bash
+mkdir wheels
+pip download -r requirements.txt -d wheels
+```
+*On the offline machine, install via: `pip install --no-index --find-links=wheels -r requirements.txt`.*
 
 ---
 
