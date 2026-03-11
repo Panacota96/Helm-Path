@@ -50,11 +50,18 @@ def get_pypandoc():
         pypandoc = pypandoc_module
     return pypandoc
 
+VERSION = "0.1.0"
+
 @app.callback()
 def main_callback(
-    verbose: bool = typer.Option(False, "--verbose", "-v", help="Enable verbose logging")
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Enable verbose logging"),
+    version: bool = typer.Option(False, "--version", "-V", help="Show the version and exit")
 ):
     """Global configuration for Helm-Path."""
+    if version:
+        console.print(f"[bold gold1]🛡️  Helm-Path Version:[/bold gold1] [bold cyan]{VERSION}[/bold cyan]")
+        raise typer.Exit()
+    
     global VERBOSE_MODE
     VERBOSE_MODE = verbose
     if VERBOSE_MODE:
