@@ -12,21 +12,26 @@ In the Forgotten Realms, **Helm** is the god of guardians, protection, and vigil
 
 ## 🛠️ Features
 - **The Vigilant Helm:** Spin up customized Kali Linux or Exegol-style containers instantly.
-- **The Watcher's Path (Logging):** Transparent, real-time command logging using the `script` utility.
-- **The Scribe Engine (AI):** Uses local LLMs (via Ollama) to chronicle your terminal history into structured reports.
-- **Eternal Chronicle:** Automatically generates Table of Contents, Overview, Task-by-Task breakdowns, and Conclusions.
+- **The Watcher's Arsenal:** 166+ pre-installed security tools including `nmap`, `metasploit`, `sqlmap`, `ffuf`, `linpeas`, `pspy`, `chisel`, and more.
+- **The Watcher's Path (Logging):** Transparent, multi-part command logging using the `script` utility in a `zsh` environment.
+- **Scribe Engine (AI):** Uses local LLMs (via Ollama) to chronicle your terminal history into structured reports.
+- **Intelligent Summarization:** Automatically handles large logs by chunking and summarizing the journey for the AI.
+- **Session State Tracking:** Persistent `metadata.json` tracks vigil duration, completion status, and log parts.
+- **Automated Chronicling:** Use the `--auto-report` flag to generate your write-up immediately upon completing a vigil.
+- **The Scribe's Sanctuary:** Completed chronicles are automatically preserved in the `writeups/` directory in both Markdown and PDF formats.
 
 ---
 
 ## 📋 Prerequisites
-- **Docker:** Must be installed and running.
+- **Docker:** Must be installed and running. (WSL 2 supported with Docker Desktop integration).
 - **Ollama:** Required for local AI report generation. [Download Ollama](https://ollama.ai/).
+- **Pandoc & LaTeX:** Required for PDF generation (e.g., `sudo apt install pandoc texlive-latex-base`).
 - **Python 3.10+**
 
 ---
 
-## 💻 Installation as an App (Recommended)
-To install Helm-Path globally as a standalone application in your Kali or WSL environment:
+## 💻 Installation (The Forging)
+To install Helm-Path globally as a standalone application:
 
 1. **Clone the repository:**
    ```bash
@@ -34,70 +39,48 @@ To install Helm-Path globally as a standalone application in your Kali or WSL en
    cd Helm-Path
    ```
 
-2. **Install globally:**
+2. **Forge and Deploy:**
    ```bash
-   pip install .
+   make deploy
    ```
-   *Now you can run the `helm-path` command from anywhere in your terminal.*
+   *This will restructure the project, verify dependencies, and install the `helm-path` command globally.*
 
 ---
 
-## 🐧 WSL Support (Windows Subsystem for Linux)
-Helm-Path is fully compatible with WSL 2. To use it in a WSL environment:
-1. **Docker Integration:** Ensure "WSL Integration" is enabled in your **Docker Desktop** settings (Settings > Resources > WSL Integration).
-2. **Environment:** Run all commands natively within your WSL terminal (e.g., Ubuntu, Kali-WSL).
-3. **Paths:** Volume mounting automatically handles the transition between Windows and Linux file systems.
+## 🛡️ The Watcher's Workflow
+
+### 1. Commence a Vigil
+Launch your environment. Use `--auto-report` to automate the final chronicle.
+```bash
+helm-path start --session-name "operation_overlord" --auto-report
+```
+*Upon exiting (`exit`), the Watcher will ask if your vigil is complete.*
+
+### 2. Resume the Watch
+If a vigil is not marked as complete, you can return to it later. Helm-Path will link the new logs (`path_part_N.log`) to the existing metadata.
+
+### 3. Summon the Scribe
+Generate your academic report at any time. If the vigil is complete, the Scribe will promote the final chronicle to the `writeups/` sanctuary.
+```bash
+helm-path report "operation_overlord" --format pdf
+```
 
 ---
 
-## 🚀 Quick Start
-
-1. **Install Dependencies:**
-   ```bash
-   pip install -r requirements.txt
-   ```
-
-2. **Start a Session:**
-   ```bash
-   python src/main.py start --session-name "hackthebox_machine"
-   ```
-   *This will build/run the Kali environment and drop you into a shell. Every command you run will be recorded.*
-
-3. **Complete Your Work:**
-   Once you've finished the machine, simply type `exit`.
-
-4. **Generate the Report:**
-   ```bash
-   # Ensure Ollama is running and you have a model (e.g., llama3)
-   ollama pull llama3
-   python src/main.py report "hackthebox_machine" --model llama3
-   ```
-
----
-
-## 🧠 Brainstorming: The Future of Helm-Path
-
-### 1. **Multi-Image Support**
-- Add flags for `--exegol` to pull specific Exegol wrappers.
-- Support for Alpine-based "Micro-Helms" for lightweight reconnaissance.
-
-### 2. **Context-Aware Logging**
-- **Network Capture:** Automatically start a `tcpdump` session that saves to the session folder. The AI can then analyze `.pcap` data for the report.
-- **Teaching Moments:** Use a special prefix (e.g., `#! NOTE: This is for privilege escalation`) that the AI prioritizes as an educational highlight.
-
-### 3. **Visual Scribe**
-- Integrate a headless browser or X11 forwarding to capture screenshots of web-based exploits (like Burp Suite or browser-based bypasses).
-
-### 4. **GitHub Automator**
-- A `helm-path push` command that automatically formats the `WRITEUP.md` and pushes it to your "Public Write-ups" repository with appropriate tags.
+## 📂 Project Structure
+- `helm_path/`: The core logic of the Watcher.
+- `docker/`: The forge where the Helm is shaped (Dockerfile).
+- `sessions/`: Raw logs and metadata of every vigil.
+- `writeups/`: The final sanctuary for completed chronicles (.md and .pdf).
+- `Makefile` & `deploy.sh`: Automation for installation and management.
 
 ---
 
 ## 🤝 Accessibility & Design
 Helm-Path is designed with **Universal Accessibility** in mind:
-- **Semantic CLI:** Uses `rich` for high-contrast, text-hierarchical terminal feedback.
+- **Semantic CLI:** Uses `rich` for high-contrast, text-hierarchical terminal feedback (Gold, Azure, Silver).
 - **Navigable Reports:** All generated Markdown follows strict heading hierarchies for screen-reader compatibility.
-- **Text-First Design:** Avoids reliance on color-only status indicators.
+- **Standardized Environment:** Pre-configured `zsh` with `oh-my-zsh` for robust tab-completion and accessible terminal interaction.
 
 ---
 

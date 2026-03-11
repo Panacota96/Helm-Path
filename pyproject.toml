@@ -24,5 +24,4 @@ dependencies = [
 helm-path = "helm_path.main:app"
 
 [tool.setuptools.packages.find]
-where = ["src"]
 include = ["helm_path*"]
