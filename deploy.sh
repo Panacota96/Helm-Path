@@ -36,8 +36,14 @@ if ! command -v ollama &> /dev/null; then
 fi
 
 # 4. Installation
+PIP_FLAGS=""
+if [[ "$1" == "-v" ]] || [[ "$1" == "--verbose" ]]; then
+    echo -e "${CYAN}🔍 Verbose mode enabled for installation.${NC}"
+    PIP_FLAGS="-vv"
+fi
+
 echo -e "${BLUE}🔨 Installing Helm-Path globally...${NC}"
-python3 -m pip install . --break-system-packages
+python3 -m pip install . $PIP_FLAGS --break-system-packages
 
 if [ $? -eq 0 ]; then
     echo -e "${GREEN}✅ Helm-Path has been forged and installed successfully!${NC}"

@@ -8,7 +8,11 @@ SHELL := /bin/bash
 # Deploy and forge the application
 deploy:
 	@chmod +x deploy.sh
-	@./deploy.sh
+	@if [ "$(VERBOSE)" = "1" ]; then \
+		./deploy.sh --verbose; \
+	else \
+		./deploy.sh; \
+	fi
 
 # Run project tests
 test:

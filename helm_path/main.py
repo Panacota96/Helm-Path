@@ -23,6 +23,17 @@ client = docker.from_env()
 
 SESSION_DIR = "sessions"
 WRITEUPS_DIR = "writeups"
+VERBOSE_MODE = False
+
+@app.callback()
+def main_callback(
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Enable verbose logging")
+):
+    """Global configuration for Helm-Path."""
+    global VERBOSE_MODE
+    VERBOSE_MODE = verbose
+    if VERBOSE_MODE:
+        console.print("[dim]🔍 Verbose mode enabled. The Watcher's eye is wider.[/dim]")
 
 def load_metadata(session_path):
     meta_file = os.path.join(session_path, "metadata.json")
