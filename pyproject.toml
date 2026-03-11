@@ -20,8 +20,14 @@ dependencies = [
     "pypandoc"
 ]
 
+[project.optional-dependencies]
+dev = [
+    "pytest"
+]
+
 [project.scripts]
 helm-path = "helm_path.main:app"
 
 [tool.setuptools.packages.find]
+where = ["src"]
 include = ["helm_path*"]

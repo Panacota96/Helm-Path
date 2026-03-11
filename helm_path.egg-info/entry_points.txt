@@ -1,0 +1,2 @@
+[console_scripts]
+helm-path = helm_path.main:app

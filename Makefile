@@ -3,12 +3,16 @@
 
 SHELL := /bin/bash
 
-.PHONY: deploy vigil chronicle list-vigils clean
+.PHONY: deploy vigil chronicle list-vigils clean test
 
 # Deploy and forge the application
 deploy:
 	@chmod +x deploy.sh
 	@./deploy.sh
+
+# Run project tests
+test:
+	@pytest Test/
 
 # Commence a new Vigil
 # Usage: make vigil name=my_session
