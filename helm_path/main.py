@@ -1,485 +1,371 @@
+from __future__ import annotations
+
+import subprocess
+from pathlib import Path
+from typing import Any
+
 import typer
 from rich.console import Console
 from rich.panel import Panel
-from rich.prompt import Confirm
-import os
-import time
-import json
-import re
-import subprocess
-import hashlib
-from datetime import datetime
-from helm_path import db, reptor_bridge
 
-# Heavy imports deferred for speed
+from helm_path import __version__
+from helm_path.ai import generate_report_bundle
+from helm_path.audit import init_audit_db, record_run, verify_chain
+from helm_path.constants import (
+    APP_NAME,
+    AUDIT_DB_FILENAME,
+    CHALLENGES_DIRNAME,
+    DEFAULT_MODEL,
+    FULL_IMAGE_TAG,
+    LITE_IMAGE_TAG,
+    REPORT_MANIFEST_FILENAME,
+)
+from helm_path.processing import (
+    build_clean_log,
+    calculate_file_hash,
+    write_json_file,
+    write_report_manifest,
+)
+from helm_path.workspace import (
+    create_run_layout,
+    ensure_challenge_workspace,
+    init_challenge_workspace,
+    list_run_directories,
+    load_manifest,
+    load_report_manifest,
+    report_output_paths,
+    resolve_challenge_path,
+    run_file_paths,
+    save_challenge_metadata,
+)
+
 docker = None
 pypandoc = None
-ollama = None
 
-app = typer.Typer(help="Helm-Path: Dockerized Security Session Orchestrator & AI Report Generator")
+app = typer.Typer(help="Helm-Path: local-first CTF flight recorder and writeup generator")
 console = Console()
 
-SESSION_DIR = "sessions"
-WRITEUPS_DIR = "writeups"
-VERBOSE_MODE = False
 
 def get_docker_client():
     global docker
     if docker is None:
         import docker as docker_module
+
         docker = docker_module
     try:
         return docker.from_env()
-    except Exception as e:
-        console.print(f"[bold red]Error:[/bold red] Could not connect to Docker. Is it running? ({str(e)})")
-        raise typer.Exit(1)
+    except Exception as exc:
+        console.print(f"[bold red]Docker unavailable:[/bold red] {exc}")
+        raise typer.Exit(1) from exc
 
-def get_ollama():
-    global ollama
-    if ollama is None:
-        try:
-            import ollama as ollama_module
-            ollama = ollama_module
-        except ImportError:
-            return None
-    return ollama
 
 def get_pypandoc():
     global pypandoc
     if pypandoc is None:
         import pypandoc as pypandoc_module
+
         pypandoc = pypandoc_module
     return pypandoc
 
-VERSION = "0.1.0"
+
+def build_image_if_needed(client: Any, image_tag: str, lite: bool) -> Any:
+    dockerfile = "docker/Dockerfile.lite" if lite else "docker/Dockerfile.kali"
+    try:
+        return client.images.get(image_tag)
+    except docker.errors.ImageNotFound:
+        console.print(f"[bold yellow]Building image[/bold yellow] {image_tag} from {dockerfile}")
+        image, _ = client.images.build(path=".", dockerfile=dockerfile, tag=image_tag)
+        return image
+
+
+def select_run_dirs(challenge_path: Path, run_id: str | None, all_runs: bool) -> list[Path]:
+    runs = list_run_directories(challenge_path)
+    if not runs:
+        raise typer.BadParameter("No recorded runs found in this challenge workspace.")
+    if run_id:
+        target = challenge_path / "sessions" / run_id
+        if not target.exists():
+            raise typer.BadParameter(f"Run '{run_id}' does not exist.")
+        return [target]
+    if all_runs or len(runs) == 1:
+        return runs
+    return [runs[-1]]
+
+
+def verify_manifest_files(challenge_path: Path, run_dirs: list[Path]) -> list[str]:
+    findings: list[str] = []
+    for run_dir in run_dirs:
+        manifest = load_manifest(run_dir)
+        paths = run_file_paths(challenge_path, manifest["run_id"])
+        required = {
+            "raw log": paths["raw_log"],
+            "clean log": paths["clean_log"],
+            "manifest": paths["manifest"],
+        }
+        missing = False
+        for label, path in required.items():
+            if not path.exists():
+                findings.append(f"Missing {label} for run {manifest['run_id']}: {path}")
+                missing = True
+        if missing:
+            continue
+        raw_hash = calculate_file_hash(paths["raw_log"])
+        clean_hash = calculate_file_hash(paths["clean_log"])
+        if raw_hash != manifest["hashes"]["raw_log"]:
+            findings.append(f"Hash mismatch for raw log in run {manifest['run_id']}.")
+        if clean_hash != manifest["hashes"]["clean_log"]:
+            findings.append(f"Hash mismatch for clean log in run {manifest['run_id']}.")
+    return findings
+
+
+def verify_report_outputs(challenge_path: Path) -> list[str]:
+    findings: list[str] = []
+    report_manifest = load_report_manifest(challenge_path)
+    report_paths = report_output_paths(challenge_path)
+    if not report_manifest:
+        orphaned = [path for name, path in report_paths.items() if name != REPORT_MANIFEST_FILENAME and path.exists()]
+        for path in orphaned:
+            findings.append(f"Orphaned report output not referenced by report manifest: {path}")
+        return findings
+
+    outputs = report_manifest.get("outputs", {})
+    for filename, expected_hash in outputs.items():
+        path = challenge_path / "reports" / filename
+        if not path.exists():
+            findings.append(f"Missing report output referenced in report manifest: {path}")
+            continue
+        actual_hash = calculate_file_hash(path)
+        if actual_hash != expected_hash:
+            findings.append(f"Hash mismatch for report output {filename}.")
+
+    tracked = {challenge_path / "reports" / name for name in outputs}
+    for name, path in report_paths.items():
+        if name == REPORT_MANIFEST_FILENAME:
+            continue
+        if path.exists() and path not in tracked:
+            findings.append(f"Orphaned report output not referenced by report manifest: {path}")
+    return findings
+
 
 @app.callback(invoke_without_command=True)
 def main_callback(
     ctx: typer.Context,
-    verbose: bool = typer.Option(False, "--verbose", "-v", help="Enable verbose logging"),
-    version: bool = typer.Option(False, "--version", "-V", help="Show the version and exit")
+    version: bool = typer.Option(False, "--version", "-V", help="Show the version and exit"),
 ):
-    """Global configuration for Helm-Path."""
     if version:
-        console.print(f"[bold gold1]🛡️  Helm-Path Version:[/bold gold1] [bold cyan]{VERSION}[/bold cyan]")
+        console.print(f"{APP_NAME} {__version__}")
         raise typer.Exit()
-    
-    global VERBOSE_MODE
-    VERBOSE_MODE = verbose
-    if VERBOSE_MODE:
-        console.print("[dim]🔍 Verbose mode enabled. The Watcher's eye is wider.[/dim]")
-    
-    # Initialize the Tamper-Evident Database
-    db.init_db()
+    if ctx.invoked_subcommand is None:
+        console.print(ctx.get_help())
 
-def load_metadata(session_path):
-    meta_file = os.path.join(session_path, "metadata.json")
-    if os.path.exists(meta_file):
-        with open(meta_file, "r") as f:
-            return json.load(f)
-    return {
-        "session_id": os.path.basename(session_path),
-        "is_complete": False,
-        "logs": [],
-        "created_at": datetime.now().isoformat(),
-        "total_vigils": 0
-    }
 
-def save_metadata(session_path, metadata):
-    meta_file = os.path.join(session_path, "metadata.json")
-    with open(meta_file, "w") as f:
-        json.dump(metadata, f, indent=4)
+@app.command()
+def init(
+    competition: str = typer.Argument(..., help="Competition name"),
+    category: str = typer.Argument(..., help="Category name"),
+    challenge: str = typer.Argument(..., help="Challenge name"),
+    root: Path = typer.Option(Path(CHALLENGES_DIRNAME), "--root", help="Root folder for challenge workspaces"),
+):
+    """Create a challenge workspace with templates and local audit storage."""
+    challenge_path = init_challenge_workspace(root, competition, category, challenge)
+    init_audit_db(challenge_path / ".ffr" / AUDIT_DB_FILENAME)
+    console.print(Panel.fit(f"Workspace created at\n[bold cyan]{challenge_path}[/bold cyan]", title="Challenge Initialized"))
 
-def calculate_file_hash(filepath):
-    """Calculates SHA-256 hash of a file."""
-    if not os.path.exists(filepath):
-        return None
-    sha256_hash = hashlib.sha256()
-    with open(filepath, "rb") as f:
-        for byte_block in iter(lambda: f.read(4096), b""):
-            sha256_hash.update(byte_block)
-    return sha256_hash.hexdigest()
-
-def clean_sensitive_data(content):
-    """Redacts sensitive information from logs."""
-    patterns = [
-        (r'password\s*=\s*[\S]+', 'password=[REDACTED]'),
-        (r'API_KEY\s*=\s*[\S]+', 'API_KEY=[REDACTED]'),
-        (r'Authorization:\s*Bearer\s*[\S]+', 'Authorization: Bearer [REDACTED]'),
-        (r'--password\s+[\S]+', '--password [REDACTED]'),
-        (r'-p\s+[\S]+', '-p [REDACTED]'), 
-    ]
-    for pattern, replacement in patterns:
-        content = re.sub(pattern, replacement, content, flags=re.IGNORECASE)
-    return content
-
-def clean_log(log_path):
-    """
-    Strips ANSI escape codes and filters out terminal noise.
-    """
-    if not os.path.exists(log_path):
-        return None
-    
-    with open(log_path, "r", encoding="utf-8", errors="ignore") as f:
-        content = f.read()
-    
-    # Remove ANSI escape sequences
-    ansi_escape = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
-    cleaned = ansi_escape.sub('', content)
-    
-    # Filter out common noise to save tokens
-    noise_patterns = [
-        r'^# clear\n',             # Clear command
-        r'^# ls\s*$',              # Empty ls
-        r'^# cd \.\.\n',           # Simple cd up
-        r'^\s*$',                  # Empty lines
-    ]
-    
-    lines = cleaned.splitlines()
-    filtered_lines = []
-    for line in lines:
-        if not any(re.match(p, line) for p in noise_patterns):
-            filtered_lines.append(line)
-            
-    return "\n".join(filtered_lines)
-
-def summarize_path_if_needed(log_content, model="llama3", max_chars=12000):
-    """
-    If the path is too long for the Oracle's eye, we summarize it in chunks.
-    """
-    oracle = get_ollama()
-    if not oracle:
-        return log_content
-
-    if len(log_content) < max_chars:
-        return log_content
-
-    console.print(f"🕯️  [italic]The Path is long. The Scribe is summarizing the journey...[/italic]")
-    
-    # Split into chunks of ~10k chars
-    chunks = [log_content[i:i+max_chars] for i in range(0, len(log_content), max_chars)]
-    summaries = []
-    
-    for i, chunk in enumerate(chunks):
-        with console.status(f"[bold magenta]Oracle Summarizing Part {i+1}/{len(chunks)}...[/bold magenta]"):
-            summary_prompt = f"Summarize the following terminal log chunk, focusing on successful commands and key findings for a CTF write-up:\n\n{chunk}"
-            response = oracle.chat(model=model, messages=[{'role': 'user', 'content': summary_prompt}])
-            summaries.append(response['message']['content'])
-            
-    return "\n\n--- CHRONICLE SUMMARY ---\n\n" + "\n\n".join(summaries)
 
 @app.command()
 def start(
-    image_tag: str = typer.Option(None, help="Tag for the Vigil environment"),
-    session_name: str = typer.Option(None, help="Name for this Vigil (session)"),
-    auto_report: bool = typer.Option(False, "--auto-report", help="Automatically summon the Scribe upon completion"),
-    no_record: bool = typer.Option(False, "--no-record", help="Disable session recording (Audit logs will not be generated)"),
-    lite: bool = typer.Option(False, "--lite", help="Use a lightweight environment (fewer tools, faster start)")
+    challenge_path: Path = typer.Argument(..., help="Path to an initialized challenge workspace"),
+    lite: bool = typer.Option(False, "--lite", help="Use the lightweight capture image"),
 ):
-    """
-    Commences a new Vigil (security session) in the Watcher's Helm.
-    """
+    """Record a new challenge run inside the Helm-Path container."""
+    challenge_path = resolve_challenge_path(challenge_path)
+    metadata = ensure_challenge_workspace(challenge_path)
     client = get_docker_client()
-    
-    # Set default image tags based on lite mode
-    if not image_tag:
-        image_tag = "helm-path:lite" if lite else "helm-path:kali"
-    
-    dockerfile = "docker/Dockerfile.lite" if lite else "docker/Dockerfile.kali"
-    
-    # Use timestamp for session naming if not provided
-    timestamp = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
-    if not session_name:
-        session_name = f"vigil_{timestamp}"
-    
-    session_path = os.path.abspath(os.path.join(SESSION_DIR, session_name))
-    os.makedirs(session_path, exist_ok=True)
-    
-    metadata = load_metadata(session_path)
+    image_tag = LITE_IMAGE_TAG if lite else FULL_IMAGE_TAG
+    image = build_image_if_needed(client, image_tag, lite)
 
-    try:
-        # Check for image
-        try:
-            client.images.get(image_tag)
-            if VERBOSE_MODE:
-                console.print(f"👁️ [dim]Image '{image_tag}' found locally.[/dim]")
-        except docker.errors.ImageNotFound:
-            if not os.path.exists(dockerfile):
-                 if lite:
-                     console.print("⚠️ [yellow]Lite Dockerfile not found. Falling back to Kali standard...[/yellow]")
-                     dockerfile = "docker/Dockerfile.kali"
-                     image_tag = "helm-path:kali"
-            
-            console.print(f"🔨 [bold yellow]Forging the Helm... Building '{image_tag}'...[/bold yellow]")
-            client.images.build(path=".", dockerfile=dockerfile, tag=image_tag)
-            console.print(f"✅ [bold green]Helm forged successfully.[/bold green]")
+    _, manifest = create_run_layout(challenge_path, metadata, image_tag=image_tag, image_id=image.id)
+    raw_log_relative = Path("sessions") / manifest["run_id"] / "raw.log"
+    docker_command = [
+        "docker",
+        "run",
+        "-it",
+        "--rm",
+        "-v",
+        f"{challenge_path.resolve()}:/workspace",
+        "--workdir",
+        "/workspace",
+        "-e",
+        f"LOG_FILE={raw_log_relative.as_posix()}",
+        "--name",
+        f"helm-path-{manifest['run_id']}",
+        image_tag,
+    ]
 
-        log_filename = f"session_{timestamp}.log"
-        start_time = datetime.now().isoformat()
-        
-        console.print(Panel(
-            f"🛡️ [bold yellow]The Vigil Commences:[/bold yellow] {session_name}\n"
-            f"👤 [bold magenta]Identity:[/bold magenta] Durk (sudoer)\n"
-            f"📘 [bold cyan]Chronicle mapping:[/bold cyan] {session_path} -> /helm-path", 
-            title=f"[bold blue]Helm-Path: {'Lite' if lite else 'Full'} Vigil[/bold blue]", 
-            expand=False,
-            border_style="yellow"
-        ))
+    console.print(
+        Panel.fit(
+            f"Challenge: [bold]{metadata['challenge_name']}[/bold]\n"
+            f"Run ID: [bold cyan]{manifest['run_id']}[/bold cyan]\n"
+            f"Recording to: [bold]{raw_log_relative.as_posix()}[/bold]",
+            title="Recording Active",
+        )
+    )
 
-        env_vars = {f"LOG_FILE": log_filename}
-        if no_record:
-            env_vars["SCRIPT_LOGGED"] = "1"
-            console.print("[bold red]⚠️  RECORDING DISABLED: This session will not be chronicled.[/bold red]")
-        else:
-            console.print("[bold green]🔴 RECORDING ACTIVE: All terminal output is being logged for the chronicle.[/bold green]")
-            console.print("[dim]Type 'exit' to finish the vigil.[/dim]\n")
+    subprocess.run(docker_command, check=False)
 
-        docker_command = [
-            "docker", "run", "-it", "--rm",
-            "-v", f"{session_path}:/helm-path",
-            "--name", f"{session_name}_{timestamp}",
-            image_tag
-        ]
-        
-        for k, v in env_vars.items():
-            docker_command.insert(2, "-e")
-            docker_command.insert(3, f"{k}={v}")
+    paths = run_file_paths(challenge_path, manifest["run_id"])
+    if not paths["raw_log"].exists():
+        console.print("[bold red]No raw log was captured. The container likely exited before the recorder started.[/bold red]")
+        raise typer.Exit(1)
 
-        subprocess.run(docker_command)
-        
-        end_time = datetime.now().isoformat()
-        
-        log_entry = {
-            "file": log_filename,
-            "start_time": start_time,
-            "end_time": end_time
-        }
+    stats = build_clean_log(paths["raw_log"], paths["clean_log"])
+    manifest["captured_at"]["end"] = stats["processed_at"]
+    manifest["hashes"]["raw_log"] = calculate_file_hash(paths["raw_log"])
+    manifest["hashes"]["clean_log"] = calculate_file_hash(paths["clean_log"])
+    manifest["processing"] = stats
+    write_json_file(paths["manifest"], manifest)
 
-        if not no_record:
-            full_log_path = os.path.join(session_path, log_filename)
-            file_hash = calculate_file_hash(full_log_path)
-            if file_hash:
-                log_entry["integrity_hash"] = file_hash
-                if VERBOSE_MODE:
-                    console.print(f"🔒 [dim]Log Integrity Hash:[/dim] {file_hash}")
-                
-                # Insert into Tamper-Evident Database
-                chain_hash = db.insert_session(session_name, start_time, end_time, file_hash, json.dumps(metadata))
-                console.print(f"🔗 [bold green]Audit Chain Secured:[/bold green] {chain_hash[:16]}...")
-        
-        metadata["logs"].append(log_entry)
-        metadata["is_complete"] = True
-        save_metadata(session_path, metadata)
-        
-        console.print(f"\n✅ [bold yellow]Vigil Concluded.[/bold yellow]")
-        
-        if auto_report and not no_record:
-            console.print(f"📜 [bold cyan]Auto-Report active. Summoning the Scribe...[/bold cyan]")
-            report(session_id=session_name)
-        else:
-            console.print(f"✍️ Run [bold blue]helm-path report {session_name}[/bold blue] whenever you are ready.")
+    init_audit_db(challenge_path / ".ffr" / AUDIT_DB_FILENAME)
+    record_run(
+        challenge_path / ".ffr" / AUDIT_DB_FILENAME,
+        challenge_id=metadata["challenge_id"],
+        run_id=manifest["run_id"],
+        manifest_path=paths["manifest"],
+    )
+    metadata["updated_at"] = stats["processed_at"]
+    metadata["status"] = "recorded"
+    save_challenge_metadata(challenge_path, metadata)
+    console.print(f"[bold green]Run captured:[/bold green] {manifest['run_id']}")
 
-    except Exception as e:
-        console.print(f"[bold red]Desecration (Error):[/bold red] {str(e)}")
-
-@app.command()
-def verify(session_id: str = typer.Argument(None, help="The Vigil ID to verify (optional, verifies the whole chain if omitted)")):
-    """
-    Verifies the integrity of the audit log chain and session logs.
-    """
-    console.print("🔍 [bold]Verifying Cryptographic Audit Chain...[/bold]")
-    is_valid, message = db.verify_chain()
-    if is_valid:
-        console.print(f"  ✅ [green]{message}[/green]")
-    else:
-        console.print(f"  🚨 [bold red]{message}[/bold red]")
-        return
-
-    if not session_id:
-        return
-
-    session_path = os.path.join(SESSION_DIR, session_id)
-    if not os.path.exists(session_path):
-        console.print(f"[bold red]Error:[/bold red] Vigil '{session_id}' not found.")
-        return
-
-    metadata = load_metadata(session_path)
-    console.print(f"\n🔍 Verifying File Integrity for Vigil: [bold]{session_id}[/bold]")
-
-    all_valid = True
-    for log in metadata["logs"]:
-        if "integrity_hash" in log:
-            log_path = os.path.join(session_path, log["file"])
-            current_hash = calculate_file_hash(log_path)
-            
-            if current_hash == log["integrity_hash"]:
-                console.print(f"  ✅ {log['file']}: [green]VERIFIED[/green]")
-            else:
-                console.print(f"  ❌ {log['file']}: [bold red]MODIFIED[/bold red] (Expected {log['integrity_hash'][:8]}..., got {current_hash[:8]}...)")
-                all_valid = False
-    
-    if all_valid:
-        console.print("\n🛡️  [bold green]File Integrity Check Passed.[/bold green]")
-    else:
-        console.print("\n🚨 [bold red]File Integrity Check Failed![/bold red]")
 
 @app.command()
 def report(
-    session_id: str = typer.Argument(..., help="The Vigil ID to chronicle"),
-    model: str = typer.Option("llama3", help="AI Oracle name (Ollama model)"),
-    format: str = typer.Option("markdown", help="Chronicle output format (markdown or pdf)"),
-    sysreptor: bool = typer.Option(False, "--sysreptor", help="Export the finding to SysReptor"),
-    project_id: str = typer.Option(None, "--project-id", help="Target SysReptor Project ID")
+    challenge_path: Path = typer.Argument(..., help="Path to an initialized challenge workspace"),
+    run_id: str = typer.Option(None, "--run-id", help="Generate outputs from a single run"),
+    all_runs: bool = typer.Option(False, "--all-runs", help="Aggregate every recorded run"),
+    model: str = typer.Option(DEFAULT_MODEL, "--model", help="Host Ollama model"),
+    format: str = typer.Option("markdown", "--format", help="markdown or pdf"),
 ):
-    """
-    Summons the Scribe to generate an AI chronicle from the Watcher's Path.
-    """
-    oracle = get_ollama()
-    if not oracle:
-        console.print("[bold red]The Scribe is missing. Run 'pip install ollama'.[/bold red]")
-        return
+    """Generate deterministic writeup artifacts from one or more recorded runs."""
+    challenge_path = resolve_challenge_path(challenge_path)
+    metadata = ensure_challenge_workspace(challenge_path)
+    run_dirs = select_run_dirs(challenge_path, run_id=run_id, all_runs=all_runs)
+    run_contexts: list[dict[str, Any]] = []
+    for run_dir in run_dirs:
+        manifest = load_manifest(run_dir)
+        clean_log = (run_dir / "clean.log").read_text(encoding="utf-8")
+        run_contexts.append({"manifest": manifest, "clean_log": clean_log})
 
-    session_path = os.path.join(SESSION_DIR, session_id)
-    if not os.path.exists(session_path):
-        console.print(f"[bold red]Error:[/bold red] Vigil '{session_id}' not found.")
-        return
+    bundle = generate_report_bundle(metadata, run_contexts, model=model)
+    report_paths = report_output_paths(challenge_path)
+    report_paths["DRAFT_WRITEUP.md"].write_text(bundle["draft_writeup_md"], encoding="utf-8")
+    report_paths["PATH_SUMMARY.md"].write_text(bundle["path_summary_md"], encoding="utf-8")
+    report_paths["FAILURE_ANALYSIS.md"].write_text(bundle["failure_analysis_md"], encoding="utf-8")
+    write_json_file(report_paths["payloads.json"], bundle["payloads"])
+    write_json_file(report_paths["timeline.json"], bundle["timeline"])
 
-    metadata = load_metadata(session_path)
-    if not metadata["logs"]:
-        console.print(f"[bold red]The Path is empty for vigil '{session_id}'.[/bold red]")
-        return
+    if format == "pdf":
+        try:
+            pandoc = get_pypandoc()
+            pandoc.convert_file(
+                str(report_paths["DRAFT_WRITEUP.md"]),
+                "pdf",
+                format="md",
+                outputfile=str(report_paths["DRAFT_WRITEUP.pdf"]),
+            )
+        except Exception as exc:
+            console.print(f"[yellow]PDF export skipped:[/yellow] {exc}")
 
-    if sysreptor and not reptor_bridge.is_reptor_available():
-        console.print("[bold red]Error:[/bold red] SysReptor CLI ('reptor') is not installed.")
-        console.print("[dim]Run 'pip install reptor' and 'reptor conf' to set it up.[/dim]")
-        return
+    outputs = {
+        "DRAFT_WRITEUP.md": report_paths["DRAFT_WRITEUP.md"],
+        "PATH_SUMMARY.md": report_paths["PATH_SUMMARY.md"],
+        "FAILURE_ANALYSIS.md": report_paths["FAILURE_ANALYSIS.md"],
+        "payloads.json": report_paths["payloads.json"],
+        "timeline.json": report_paths["timeline.json"],
+    }
+    if report_paths["DRAFT_WRITEUP.pdf"].exists():
+        outputs["DRAFT_WRITEUP.pdf"] = report_paths["DRAFT_WRITEUP.pdf"]
 
-    console.print(Panel(
-        f"✍️ [bold yellow]Scribe of the Watcher:[/bold yellow] Chronicling Experience\n"
-        f"📘 [bold blue]Vigil:[/bold blue] {session_id}\n"
-        f"🔮 [bold magenta]Oracle Model:[/bold magenta] {model}" + 
-        (f"\n🦖 [bold cyan]Target:[/bold cyan] SysReptor" if sysreptor else ""), 
-        expand=False,
-        border_style="blue"
-    ))
+    report_manifest = write_report_manifest(
+        challenge_path=challenge_path,
+        run_ids=[context["manifest"]["run_id"] for context in run_contexts],
+        model=model,
+        prompt_version=bundle["prompt_version"],
+        outputs=outputs,
+    )
+    write_json_file(report_paths[REPORT_MANIFEST_FILENAME], report_manifest)
 
-    all_logs_content = ""
-    with console.status("[bold cyan]Sanitizing the Watcher's Path...[/bold cyan]"):
-        for log_entry in metadata["logs"]:
-            log_file = os.path.join(session_path, log_entry["file"])
-            cleaned = clean_log(log_file)
-            if cleaned:
-                cleaned = clean_sensitive_data(cleaned)
-                all_logs_content += f"\n--- VIGIL START: {log_entry['start_time']} ---\n"
-                all_logs_content += cleaned
-                all_logs_content += f"\n--- VIGIL END: {log_entry['end_time']} ---\n"
+    metadata["updated_at"] = report_manifest["generated_at"]
+    metadata["status"] = "reported"
+    save_challenge_metadata(challenge_path, metadata)
+    console.print(f"[bold green]Report artifacts generated in[/bold green] {challenge_path / 'reports'}")
 
-    if not all_logs_content:
-        console.print("[red]The Chronicle is unreadable or empty.[/red]")
-        return
-
-    try:
-        processed_path = summarize_path_if_needed(all_logs_content, model=model)
-        
-        with console.status(f"[bold magenta]Consulting the Oracle ({model})...[/bold magenta]"):
-            if sysreptor:
-                prompt = f"""
-                You are the Scribe of the Watcher. Analyze the terminal logs and generate a structured SysReptor finding in JSON format.
-                
-                The JSON MUST follow this exact structure:
-                {{
-                  "status": "open",
-                  "data": {{
-                    "title": "Vigil Security Assessment: {session_id}",
-                    "summary": "Brief summary of the session findings.",
-                    "description": "Detailed Markdown description of the actions and observed vulnerabilities.",
-                    "recommendation": "Security recommendations based on the findings.",
-                    "cvss": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:L/I:L/A:N"
-                  }}
-                }}
-                
-                Ensure the description is high-quality Markdown. Estimate a CVSS score if vulnerabilities are found.
-                Output ONLY the raw JSON. No Markdown code blocks.
-                
-                PATH DATA:
-                {processed_path}
-                """
-            else:
-                prompt = f"""
-                You are the Scribe of the Watcher, inspired by the deity Helm. 
-                Analyze the following terminal session logs (The Watcher's Path) and generate a professional, academic CTF write-up.
-                Structure: TOC, Overview, Task Sets, Conclusion. Academic tone.
-                VIGIL: {session_id}
-                PATH DATA: {processed_path}
-                """
-            
-            response = oracle.chat(model=model, messages=[
-                {'role': 'system', 'content': 'You are the Scribe of Helm, chronicling security deeds with precision.'},
-                {'role': 'user', 'content': prompt},
-            ])
-            content = response['message']['content']
-            
-            if sysreptor:
-                # Clean up JSON if AI included code blocks
-                json_str = content.strip()
-                if json_str.startswith("```json"):
-                    json_str = json_str.replace("```json", "", 1)
-                if json_str.endswith("```"):
-                    json_str = json_str.rsplit("```", 1)[0]
-                
-                try:
-                    finding_data = json.loads(json_str.strip())
-                    # Save local copy
-                    with open(os.path.join(session_path, "finding.json"), "w") as f:
-                        json.dump(finding_data, f, indent=4)
-                    
-                    # Push to SysReptor
-                    reptor_bridge.push_finding(finding_data, project_id=project_id)
-                    
-                    # Upload logs as evidence
-                    for log_entry in metadata["logs"]:
-                        log_file = os.path.join(session_path, log_entry["file"])
-                        reptor_bridge.upload_evidence(log_file, project_id=project_id)
-                        
-                except json.JSONDecodeError:
-                    console.print("[bold red]Error:[/bold red] AI failed to generate valid JSON for SysReptor.")
-                    console.print(f"[dim]Raw content:[/dim]\n{content}")
-            else:
-                report_file = os.path.join(session_path, "WRITEUP.md")
-                with open(report_file, "w", encoding="utf-8") as f:
-                    f.write(content)
-                
-                os.makedirs(WRITEUPS_DIR, exist_ok=True)
-                global_report_file = os.path.join(WRITEUPS_DIR, f"{session_id}_WRITEUP.md")
-                with open(global_report_file, "w", encoding="utf-8") as f:
-                    f.write(content)
-                
-                if format == "pdf":
-                    try:
-                        pandoc = get_pypandoc()
-                        pdf_file = os.path.join(WRITEUPS_DIR, f"{session_id}_WRITEUP.pdf")
-                        pandoc.convert_text(content, 'pdf', format='md', outputfile=pdf_file)
-                        console.print(f"📜 [bold yellow]PDF Chronicled at:[/bold yellow] [yellow]{pdf_file}[/yellow]")
-                    except Exception as pdf_err:
-                        console.print(f"[bold red]PDF Forging Failed:[/bold red] {str(pdf_err)}")
-
-                console.print(f"🏆 [bold yellow]Vigil Complete! Final chronicle preserved at:[/bold yellow] [yellow]{global_report_file}[/yellow]")
-    except Exception as e:
-        console.print(f"[bold red]AI Generation Failed:[/bold red] {str(e)}")
 
 @app.command()
-def list_sessions():
-    """Lists all previous sessions and their status."""
-    if not os.path.exists(SESSION_DIR):
-        console.print("[red]No sessions found.[/red]")
-        return
-    sessions = os.listdir(SESSION_DIR)
-    console.print("[bold blue]The Watcher's Archive:[/bold blue]")
-    for s in sessions:
-        s_path = os.path.join(SESSION_DIR, s)
-        if os.path.isdir(s_path):
-            metadata = load_metadata(s_path)
-            console.print(f" - {s} | Created: {metadata['created_at']}")
+def verify(
+    challenge_path: Path = typer.Argument(..., help="Path to an initialized challenge workspace"),
+    run_id: str = typer.Option(None, "--run-id", help="Verify a single run"),
+):
+    """Verify audit chain, run manifests, and generated report outputs."""
+    challenge_path = resolve_challenge_path(challenge_path)
+    ensure_challenge_workspace(challenge_path)
+    run_dirs = select_run_dirs(challenge_path, run_id=run_id, all_runs=run_id is None)
+    audit_findings = verify_chain(challenge_path / ".ffr" / AUDIT_DB_FILENAME)
+    manifest_findings = verify_manifest_files(challenge_path, run_dirs)
+    report_findings = verify_report_outputs(challenge_path)
+
+    findings = audit_findings + manifest_findings + report_findings
+    if findings:
+        console.print("[bold red]Verification failed[/bold red]")
+        for finding in findings:
+            console.print(f" - {finding}")
+        raise typer.Exit(1)
+
+    console.print("[bold green]Verification passed[/bold green]")
+
+
+@app.command()
+def doctor(
+    model: str = typer.Option(DEFAULT_MODEL, "--model", help="Model name to validate"),
+):
+    """Check local prerequisites for capture and report generation."""
+    checks: list[tuple[str, bool, str]] = []
+
+    try:
+        get_docker_client().ping()
+        checks.append(("Docker", True, "reachable"))
+    except Exception as exc:
+        checks.append(("Docker", False, str(exc)))
+
+    try:
+        result = subprocess.run(["ollama", "list"], capture_output=True, text=True, check=False)
+        if result.returncode != 0:
+            raise RuntimeError(result.stderr.strip() or "ollama list failed")
+        model_present = model in result.stdout
+        checks.append(("Ollama", True, "reachable"))
+        checks.append((f"Model {model}", model_present, "installed" if model_present else "missing"))
+    except Exception as exc:
+        checks.append(("Ollama", False, str(exc)))
+
+    try:
+        pandoc = get_pypandoc()
+        version = pandoc.get_pandoc_version()
+        checks.append(("Pandoc", True, str(version)))
+    except Exception as exc:
+        checks.append(("Pandoc", False, f"optional: {exc}"))
+
+    passed = True
+    for label, ok, detail in checks:
+        status = "[green]OK[/green]" if ok else "[yellow]WARN[/yellow]"
+        console.print(f"{status} {label}: {detail}")
+        if label in {"Docker", "Ollama"} and not ok:
+            passed = False
+        if label.startswith("Model ") and not ok:
+            passed = False
+
+    if not passed:
+        raise typer.Exit(1)
+
 
 if __name__ == "__main__":
     app()

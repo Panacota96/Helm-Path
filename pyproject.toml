@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "helm-path"
-version = "0.1.0"
-description = "Dockerized Security Session Orchestrator & AI Report Generator"
+version = "0.2.0"
+description = "Local-first CTF flight recorder and AI writeup generator"
 readme = "README.md"
 requires-python = ">=3.10"
 authors = [
@@ -28,6 +28,12 @@ dev = [
 [project.scripts]
 helm-path = "helm_path.main:app"
 
+[tool.setuptools]
+include-package-data = true
+
 [tool.setuptools.packages.find]
-where = ["src"]
+where = ["."]
 include = ["helm_path*"]
+
+[tool.setuptools.package-data]
+"helm_path.prompts" = ["*.txt"]

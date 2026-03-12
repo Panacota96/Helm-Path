@@ -1,9 +1,7 @@
 FROM kalilinux/kali-rolling
 
-# Avoid interactive prompts during build
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Pre-configure Wireshark/Tshark to avoid prompts
 RUN echo "wireshark-common wireshark-common/install-setuid boolean true" | debconf-set-selections
 
 # Update and install the Watcher's Arsenal (Apt Packages)
@@ -47,10 +45,7 @@ RUN apt-get update && apt-get install -y \
     sudo \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Ollama
-RUN curl -fsSL https://ollama.com/install.sh | sh
-
-# Install Specialized Tools via Pipx (Isolated Environments)
+# Install specialized tools via Pipx
 ENV PIPX_BIN_DIR=/usr/local/bin
 RUN pipx install netexec && \
     pipx install arjun
@@ -92,17 +87,14 @@ RUN git clone https://github.com/zsh-users/zsh-autosuggestions ${ZSH_CUSTOM:-~/.
 # Enable Plugins in .zshrc
 RUN sed -i 's/plugins=(git)/plugins=(git zsh-autosuggestions zsh-syntax-highlighting)/' ~/.zshrc
 
-# Configure the Watcher's Path (Logging)
-# Ensure the helm-path directory is writable by the user
+# Configure capture workspace
 USER root
-RUN mkdir -p /helm-path && chown durk:durk /helm-path
+RUN mkdir -p /workspace && chown durk:durk /workspace
 USER durk
 
-# Add logging script to user's .zshrc
-RUN echo 'if [ -z "$SCRIPT_LOGGED" ]; then export SCRIPT_LOGGED=1; script -f -q /helm-path/${LOG_FILE:-session.log}; exit; fi' >> /home/durk/.zshrc
+RUN echo 'if [ "${SCRIPT_LOGGED:-0}" != "1" ]; then export SCRIPT_LOGGED=1; script -f -q /workspace/${LOG_FILE:-sessions/default/raw.log}; exit; fi' >> /home/durk/.zshrc
 
-# Welcome Message
-RUN echo 'echo -e "\n\033[1;33m🛡️  The Watcher has forged your Arsenal. You are guarding as: Durk\033[0m"' >> /home/durk/.zshrc
-RUN echo 'echo -e "\033[1;34m👁️  166+ Tools documented. The Vigil is secure.\033[0m\n"' >> /home/durk/.zshrc
+RUN echo 'echo -e "\n\033[1;33mHelm-Path full capture environment ready.\033[0m"' >> /home/durk/.zshrc
+RUN echo 'echo -e "\033[1;34mLocal capture is active. AI runs on the host.\033[0m\n"' >> /home/durk/.zshrc
 
 CMD ["/usr/bin/zsh"]

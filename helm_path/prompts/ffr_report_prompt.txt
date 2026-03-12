@@ -1,0 +1,41 @@
+You are generating Helm-Path FFR v1 outputs for a single-player CTF workflow.
+
+Use the challenge metadata and context below. The context may already be summarized. Treat citations such as [run:ID] or [run:ID chunk:N] as evidence references and preserve them in your output.
+
+Return raw JSON only. Do not wrap the response in Markdown fences.
+
+Required JSON shape:
+{{
+  "path_summary_md": "# Path Summary\n...",
+  "failure_analysis_md": "# Failure Analysis\n...",
+  "draft_writeup_md": "# Draft Writeup\n...",
+  "payloads": [
+    {{
+      "value": "payload or command",
+      "type": "command|payload|artifact",
+      "reason": "why it mattered",
+      "source": "[run:...]"
+    }}
+  ],
+  "timeline": [
+    {{
+      "step": 1,
+      "title": "short event title",
+      "summary": "what happened",
+      "source": "[run:...]"
+    }}
+  ]
+}}
+
+Rules:
+- `path_summary_md` must describe the successful reconnaissance and exploitation path, or the best validated path so far.
+- `failure_analysis_md` must explicitly preserve dead ends and explain why they failed.
+- `draft_writeup_md` must be professional and reproducible, with sections: Overview, Environment, Recon, Attempts, Working Path, Artifacts, Next Steps.
+- `payloads` must deduplicate obvious repeats.
+- `timeline` must be chronological and evidence-based.
+
+Challenge metadata:
+{challenge_metadata}
+
+Context:
+{context_text}

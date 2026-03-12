@@ -1,38 +1,25 @@
-# --- HELM-PATH MAKEFILE ---
-# For the Vigil of Helm, the Watcher.
-
 SHELL := /bin/bash
 
-.PHONY: deploy vigil chronicle list-vigils clean test
+PYTHON ?= python
 
-# Deploy and forge the application
-deploy:
-	@chmod +x deploy.sh
-	@if [ "$(VERBOSE)" = "1" ]; then \
-		./deploy.sh --verbose; \
-	else \
-		./deploy.sh; \
-	fi
+.PHONY: test compile smoke ci build-lite build-full clean
 
-# Run project tests
 test:
-	@pytest Test/
+	$(PYTHON) -m pytest -q
 
-# Commence a new Vigil
-# Usage: make vigil name=my_session
-vigil:
-	@helm-path start --session-name "$(name)"
+compile:
+	$(PYTHON) -m compileall helm_path Test
 
-# Summon the Scribe to chronicle your deeds
-# Usage: make chronicle id=my_session
-chronicle:
-	@helm-path report "$(id)"
+smoke:
+	$(PYTHON) -m helm_path.main --help
 
-# List all previous vigils
-list-vigils:
-	@helm-path list-sessions
+ci: compile test smoke
 
-# Remove forged build files
+build-lite:
+	docker build -t helm-path:lite -f docker/Dockerfile.lite .
+
+build-full:
+	docker build -t helm-path:kali -f docker/Dockerfile.kali .
+
 clean:
-	@echo "🧹  Cleansing build artifacts..."
-	@rm -rf build/ dist/ *.egg-info/ src/helm_path.egg-info/
+	rm -rf build dist *.egg-info .pytest_cache
