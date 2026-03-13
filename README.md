@@ -93,6 +93,7 @@ The Docker images are for terminal capture only. AI generation now runs on the h
 - `CI` runs on every push and pull request.
 - It installs the package, compiles the code, runs the test suite, checks the CLI help output, validates challenge workspace scaffolding, and builds the lite Docker image.
 - `Release` runs on tags matching `v*` and on manual dispatch.
+- The packaged version is sourced from `helm_path.__version__`, and tagged releases must use the matching `v<version>` tag.
 - It builds Python distribution artifacts, uploads them to the GitHub release, and publishes `helm-path-lite` and `helm-path-kali` images to GitHub Container Registry.
 
 ## Roadmap
@@ -102,7 +103,7 @@ The Docker images are for terminal capture only. AI generation now runs on the h
 | First remote CI validation | Next | Confirm the GitHub Actions workflows pass on the repository and fix any hosted-run drift. |
 | Real end-to-end smoke run | Next | Validate `init -> start -> report -> verify` against a real challenge with Docker and Ollama. |
 | Reporting integration test | Next | Add a mocked Ollama test that proves canned logs produce the expected report bundle. |
-| Tagged release | Next | Cut `v0.2.0` after the live smoke run and CI validation succeed. |
+| Tagged release | Next | Cut the next `v<version>` tag after the live smoke run and CI validation succeed. |
 | Reproducible exploit verification | Later | Add optional CI replay for challenge artifacts without making it part of the local-first core. |
 | Cloud execution for heavy workloads | Later | Add remote execution only for cases where local verification is insufficient. |
 

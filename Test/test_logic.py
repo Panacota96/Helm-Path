@@ -1,5 +1,7 @@
 import json
+from importlib.metadata import version as distribution_version
 
+from helm_path import __version__
 from helm_path.ai import extract_json, render_report_prompt
 from helm_path.audit import init_audit_db, record_run, verify_chain
 from helm_path.processing import (
@@ -32,6 +34,10 @@ def test_init_challenge_workspace_creates_expected_layout(tmp_path):
     metadata = load_challenge_metadata(challenge_path)
     assert metadata["challenge_name"] == "Flag Command Injection"
     assert metadata["status"] == "initialized"
+
+
+def test_distribution_version_matches_runtime_version():
+    assert distribution_version("helm-path") == __version__
 
 
 def test_clean_sensitive_data_and_log_processing(tmp_path):
