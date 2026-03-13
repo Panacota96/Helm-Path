@@ -1,9 +1,12 @@
 import json
 from importlib.metadata import version as distribution_version
 
+import pytest
+
 from helm_path import __version__
 from helm_path.ai import extract_json, render_report_prompt
 from helm_path.audit import init_audit_db, record_run, verify_chain
+from helm_path.main import select_run_dirs, verify_manifest_files
 from helm_path.processing import (
     build_clean_log,
     calculate_file_hash,
@@ -159,3 +162,48 @@ def test_report_manifest_can_be_written_to_workspace(tmp_path):
         "payloads.json",
         "timeline.json",
     }
+
+
+def test_verify_manifest_files_reports_incomplete_run_directory(tmp_path):
+    challenge_path = init_challenge_workspace(tmp_path, "HTB", "Web", "HalfRun")
+    incomplete_run = challenge_path / "sessions" / "20260313-000000-abcd12"
+    incomplete_run.mkdir()
+    (incomplete_run / "commands.jsonl").write_text("", encoding="utf-8")
+
+    findings = verify_manifest_files(challenge_path, [incomplete_run])
+
+    assert findings
+    assert "missing manifest.json" in findings[0]
+
+
+def test_select_run_dirs_skips_incomplete_latest_run(tmp_path):
+    challenge_path = init_challenge_workspace(tmp_path, "HTB", "Web", "Selector")
+    metadata = load_challenge_metadata(challenge_path)
+    run_dir, manifest = create_run_layout(challenge_path, metadata, image_tag="helm-path:lite", image_id="sha256:test")
+    paths = run_file_paths(challenge_path, manifest["run_id"])
+    paths["raw_log"].write_text("curl -I http://target\n", encoding="utf-8")
+    paths["clean_log"].write_text("curl -I http://target\n", encoding="utf-8")
+    paths["commands_log"].write_text("", encoding="utf-8")
+    manifest["captured_at"]["end"] = "2026-03-13T10:00:00+00:00"
+    manifest["hashes"]["raw_log"] = calculate_file_hash(paths["raw_log"])
+    manifest["hashes"]["clean_log"] = calculate_file_hash(paths["clean_log"])
+    manifest["hashes"]["commands_log"] = calculate_file_hash(paths["commands_log"])
+    write_json_file(paths["manifest"], manifest)
+
+    incomplete_run = challenge_path / "sessions" / "99999999-235959-zzzzzz"
+    incomplete_run.mkdir()
+
+    selected = select_run_dirs(challenge_path, run_id=None, all_runs=False)
+
+    assert selected == [run_dir]
+
+
+def test_select_run_dirs_rejects_incomplete_specific_run(tmp_path):
+    challenge_path = init_challenge_workspace(tmp_path, "HTB", "Web", "Specific")
+    incomplete_run = challenge_path / "sessions" / "20260313-000000-abcd12"
+    incomplete_run.mkdir()
+
+    with pytest.raises(Exception) as exc_info:
+        select_run_dirs(challenge_path, run_id=incomplete_run.name, all_runs=False)
+
+    assert "incomplete" in str(exc_info.value).lower()
