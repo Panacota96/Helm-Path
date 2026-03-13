@@ -37,3 +37,4 @@ include = ["helm_path*"]
 
 [tool.setuptools.package-data]
 "helm_path.prompts" = ["*.txt"]
+"helm_path.graph.static" = ["*.html", "*.css", "*.js"]

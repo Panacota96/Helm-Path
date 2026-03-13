@@ -7,6 +7,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from helm_path.constants import COMMAND_MARKER_END, COMMAND_MARKER_START
+
 ANSI_ESCAPE = re.compile(r"\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])")
 NOISE_PATTERNS = [
     re.compile(r"^\s*$"),
@@ -15,6 +17,8 @@ NOISE_PATTERNS = [
     re.compile(r"^(clear|reset)\s*$"),
     re.compile(r"^ls\s*$"),
     re.compile(r"^cd \.\.\s*$"),
+    re.compile(rf"^{re.escape(COMMAND_MARKER_START)}::.*$"),
+    re.compile(rf"^{re.escape(COMMAND_MARKER_END)}::.*$"),
 ]
 SECRET_PATTERNS = [
     (re.compile(r"password\s*=\s*\S+", re.IGNORECASE), "password=[REDACTED]"),
