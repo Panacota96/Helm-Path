@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "helm-path"
-version = "0.2.0"
+dynamic = ["version"]
 description = "Local-first CTF flight recorder and AI writeup generator"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -37,3 +37,7 @@ include = ["helm_path*"]
 
 [tool.setuptools.package-data]
 "helm_path.prompts" = ["*.txt"]
+"helm_path.graph.static" = ["*.html", "*.css", "*.js"]
+
+[tool.setuptools.dynamic]
+version = {attr = "helm_path.__version__"}

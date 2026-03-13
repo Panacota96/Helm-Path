@@ -2,6 +2,8 @@ FROM kalilinux/kali-rolling
 
 ENV DEBIAN_FRONTEND=noninteractive
 
+COPY docker/helm-path-hooks.zsh /opt/helm-path/helm-path-hooks.zsh
+
 RUN apt-get update && apt-get install -y \
     curl \
     wget \
@@ -42,6 +44,7 @@ RUN mkdir -p /workspace && chown durk:durk /workspace
 USER durk
 
 RUN echo 'if [ "${SCRIPT_LOGGED:-0}" != "1" ]; then export SCRIPT_LOGGED=1; script -f -q /workspace/${LOG_FILE:-sessions/default/raw.log}; exit; fi' >> /home/durk/.zshrc
+RUN echo 'source /opt/helm-path/helm-path-hooks.zsh' >> /home/durk/.zshrc
 
 RUN echo 'echo -e "\n\033[1;33mHelm-Path Lite capture environment ready.\033[0m\n"' >> /home/durk/.zshrc
 
