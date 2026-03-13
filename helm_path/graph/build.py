@@ -43,10 +43,15 @@ def select_run_dirs(challenge_path: Path, run_id: str | None, all_runs: bool) ->
         target = challenge_path / "sessions" / run_id
         if not target.exists():
             raise ValueError(f"Run '{run_id}' does not exist.")
+        if not (target / "manifest.json").exists():
+            raise ValueError(f"Run '{run_id}' is incomplete because manifest.json is missing.")
         return [target]
+    complete_runs = [run for run in runs if (run / "manifest.json").exists()]
+    if not complete_runs:
+        raise ValueError("No complete recorded runs found. Remove incomplete session folders or rerun capture.")
     if all_runs or len(runs) == 1:
-        return runs
-    return [runs[-1]]
+        return complete_runs
+    return [complete_runs[-1]]
 
 
 def detect_executable(command_raw: str) -> str:

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import shutil
 import subprocess
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -91,15 +93,24 @@ def select_run_dirs(challenge_path: Path, run_id: str | None, all_runs: bool) ->
         target = challenge_path / "sessions" / run_id
         if not target.exists():
             raise typer.BadParameter(f"Run '{run_id}' does not exist.")
+        if not (target / "manifest.json").exists():
+            raise typer.BadParameter(f"Run '{run_id}' is incomplete because manifest.json is missing.")
         return [target]
+    complete_runs = [run for run in runs if (run / "manifest.json").exists()]
+    if not complete_runs:
+        raise typer.BadParameter("No complete recorded runs found. Remove incomplete session folders or rerun capture.")
     if all_runs or len(runs) == 1:
-        return runs
-    return [runs[-1]]
+        return complete_runs
+    return [complete_runs[-1]]
 
 
 def verify_manifest_files(challenge_path: Path, run_dirs: list[Path]) -> list[str]:
     findings: list[str] = []
     for run_dir in run_dirs:
+        manifest_path = run_dir / "manifest.json"
+        if not manifest_path.exists():
+            findings.append(f"Incomplete run directory is missing manifest.json: {run_dir}")
+            continue
         manifest = load_manifest(run_dir)
         paths = run_file_paths(challenge_path, manifest["run_id"])
         required = {
@@ -204,6 +215,11 @@ def init(
 def start(
     challenge_path: Path = typer.Argument(..., help="Path to an initialized challenge workspace"),
     lite: bool = typer.Option(False, "--lite", help="Use the lightweight capture image"),
+    command: str | None = typer.Option(
+        None,
+        "--command",
+        help="Run a single shell command and exit. Useful for non-interactive smoke tests.",
+    ),
 ):
     """Record a new challenge run inside the Helm-Path container."""
     challenge_path = resolve_challenge_path(challenge_path)
@@ -217,25 +233,37 @@ def start(
     paths["commands_log"].touch()
     raw_log_relative = Path("sessions") / manifest["run_id"] / "raw.log"
     commands_log_relative = Path("sessions") / manifest["run_id"] / COMMAND_LOG_FILENAME
+    interactive = command is None
+    if interactive and not (sys.stdin.isatty() and sys.stdout.isatty()):
+        shutil.rmtree(paths["run_dir"], ignore_errors=True)
+        raise typer.BadParameter("Interactive capture requires a TTY. Re-run in a terminal or pass --command for a smoke test.")
+
     docker_command = [
         "docker",
         "run",
-        "-it",
-        "--rm",
-        "-v",
-        f"{challenge_path.resolve()}:/workspace",
-        "--workdir",
-        "/workspace",
-        "-e",
-        f"LOG_FILE={raw_log_relative.as_posix()}",
-        "-e",
-        f"COMMANDS_FILE={commands_log_relative.as_posix()}",
-        "-e",
-        f"RUN_ID={manifest['run_id']}",
-        "--name",
-        f"helm-path-{manifest['run_id']}",
-        image_tag,
     ]
+    if interactive:
+        docker_command.append("-it")
+    docker_command.extend(
+        [
+            "--rm",
+            "-v",
+            f"{challenge_path.resolve()}:/workspace",
+            "--workdir",
+            "/workspace",
+            "-e",
+            f"LOG_FILE={raw_log_relative.as_posix()}",
+            "-e",
+            f"COMMANDS_FILE={commands_log_relative.as_posix()}",
+            "-e",
+            f"RUN_ID={manifest['run_id']}",
+            "--name",
+            f"helm-path-{manifest['run_id']}",
+            image_tag,
+        ]
+    )
+    if command is not None:
+        docker_command.extend(["/usr/bin/zsh", "-ic", command])
 
     console.print(
         Panel.fit(
@@ -246,10 +274,13 @@ def start(
         )
     )
 
-    subprocess.run(docker_command, check=False)
+    result = subprocess.run(docker_command, check=False)
 
     if not paths["raw_log"].exists():
+        shutil.rmtree(paths["run_dir"], ignore_errors=True)
         console.print("[bold red]No raw log was captured. The container likely exited before the recorder started.[/bold red]")
+        if result.returncode != 0:
+            console.print(f"[yellow]Docker exited with status {result.returncode}.[/yellow]")
         raise typer.Exit(1)
 
     stats = build_clean_log(paths["raw_log"], paths["clean_log"])

@@ -1,0 +1,10 @@
+{
+  "schema_version": 1,
+  "challenge_id": "test-ctf__web__smoke-challenge",
+  "competition": "Test CTF",
+  "category": "Web",
+  "challenge_name": "Smoke Challenge",
+  "created_at": "2026-03-13T00:36:13+00:00",
+  "updated_at": "2026-03-13T00:36:13+00:00",
+  "status": "initialized"
+}
