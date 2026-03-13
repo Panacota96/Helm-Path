@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 from importlib.metadata import version as distribution_version
 
 import pytest
@@ -207,3 +208,21 @@ def test_select_run_dirs_rejects_incomplete_specific_run(tmp_path):
         select_run_dirs(challenge_path, run_id=incomplete_run.name, all_runs=False)
 
     assert "incomplete" in str(exc_info.value).lower()
+
+
+def test_capture_dockerfiles_force_interactive_zsh():
+    repo_root = Path(__file__).resolve().parents[1]
+    expected_bootstrap = 'script -f -q -c "/usr/bin/zsh -i" /workspace/${LOG_FILE:-sessions/default/raw.log}'
+
+    for dockerfile_name in ("Dockerfile.lite", "Dockerfile.kali"):
+        content = (repo_root / "docker" / dockerfile_name).read_text(encoding="utf-8")
+        assert "ENV SHELL=/usr/bin/zsh" in content
+        assert expected_bootstrap in content
+        assert "source /opt/helm-path/helm-path-hooks.zsh" in content
+
+
+def test_helm_path_hook_script_uses_lf_line_endings():
+    repo_root = Path(__file__).resolve().parents[1]
+    content = (repo_root / "docker" / "helm-path-hooks.zsh").read_bytes()
+
+    assert b"\r\n" not in content
