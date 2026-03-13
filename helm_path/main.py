@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import shutil
+import socket
 import subprocess
 import sys
 from pathlib import Path
@@ -48,7 +49,58 @@ from helm_path.workspace import (
 docker = None
 pypandoc = None
 
-app = typer.Typer(help="Helm-Path: local-first CTF flight recorder and writeup generator")
+HELP_OPTION_NAMES = ["-h", "--help"]
+
+APP_HELP = "Helm-Path: local-first CTF flight recorder and writeup generator"
+APP_EPILOG = """Examples:
+  helm-path init "HTB" Web "Flag Command Injection"
+  helm-path start challenges/htb/web/flag-command-injection --lite
+  helm-path report challenges/htb/web/flag-command-injection --all-runs
+  helm-path verify challenges/htb/web/flag-command-injection
+  helm-path graph build challenges/htb/web/flag-command-injection
+  helm-path doctor
+
+Setup With make:
+  make install       Install Python dependencies and Helm-Path
+  make build-lite    Build the lite capture image
+  make build-full    Build the full Kali capture image
+  helm-path doctor   Verify Docker, Ollama, and the selected model
+"""
+INIT_EPILOG = """Examples:
+  helm-path init "HTB" Web "Flag Command Injection"
+  helm-path init "HTB" Pwn "Echo Chamber" --root challenges
+"""
+START_EPILOG = """Examples:
+  helm-path start challenges/htb/web/flag-command-injection --lite
+  helm-path start challenges/htb/web/flag-command-injection --name "web enum night 1"
+  helm-path start challenges/htb/web/flag-command-injection
+  helm-path start challenges/htb/web/flag-command-injection --command "id && whoami"
+"""
+REPORT_EPILOG = """Examples:
+  helm-path report challenges/htb/web/flag-command-injection
+  helm-path report challenges/htb/web/flag-command-injection --all-runs
+  helm-path report challenges/htb/web/flag-command-injection --run-id 20260313-020136-abcd12 --format pdf
+"""
+VERIFY_EPILOG = """Examples:
+  helm-path verify challenges/htb/web/flag-command-injection
+  helm-path verify challenges/htb/web/flag-command-injection --run-id 20260313-020136-abcd12
+"""
+DOCTOR_EPILOG = """Examples:
+  helm-path doctor
+  helm-path doctor --model llama3.2:3b
+
+Setup Checklist:
+  make install       Install Python dependencies and Helm-Path
+  make build-lite    Build the default capture image
+  make build-full    Build the full Kali image when needed
+  helm-path doctor   Confirm Docker and model prerequisites
+"""
+
+app = typer.Typer(
+    help=APP_HELP,
+    epilog=APP_EPILOG,
+    context_settings={"help_option_names": HELP_OPTION_NAMES},
+)
 app.add_typer(graph_app, name="graph")
 console = Console()
 
@@ -198,7 +250,7 @@ def main_callback(
         console.print(ctx.get_help())
 
 
-@app.command()
+@app.command(epilog=INIT_EPILOG)
 def init(
     competition: str = typer.Argument(..., help="Competition name"),
     category: str = typer.Argument(..., help="Category name"),
@@ -211,10 +263,11 @@ def init(
     console.print(Panel.fit(f"Workspace created at\n[bold cyan]{challenge_path}[/bold cyan]", title="Challenge Initialized"))
 
 
-@app.command()
+@app.command(epilog=START_EPILOG)
 def start(
     challenge_path: Path = typer.Argument(..., help="Path to an initialized challenge workspace"),
     lite: bool = typer.Option(False, "--lite", help="Use the lightweight capture image"),
+    name: str | None = typer.Option(None, "--name", help="Human-readable vigil name shown in the manifest and CLI output."),
     command: str | None = typer.Option(
         None,
         "--command",
@@ -224,11 +277,19 @@ def start(
     """Record a new challenge run inside the Helm-Path container."""
     challenge_path = resolve_challenge_path(challenge_path)
     metadata = ensure_challenge_workspace(challenge_path)
+    if name is not None and not name.strip():
+        raise typer.BadParameter("Vigil name cannot be empty.")
     client = get_docker_client()
     image_tag = LITE_IMAGE_TAG if lite else FULL_IMAGE_TAG
     image = build_image_if_needed(client, image_tag, lite)
 
-    _, manifest = create_run_layout(challenge_path, metadata, image_tag=image_tag, image_id=image.id)
+    _, manifest = create_run_layout(
+        challenge_path,
+        metadata,
+        image_tag=image_tag,
+        image_id=image.id,
+        vigil_name=name,
+    )
     paths = run_file_paths(challenge_path, manifest["run_id"])
     paths["commands_log"].touch()
     raw_log_relative = Path("sessions") / manifest["run_id"] / "raw.log"
@@ -249,25 +310,27 @@ def start(
             "--rm",
             "-v",
             f"{challenge_path.resolve()}:/workspace",
-            "--workdir",
-            "/workspace",
             "-e",
             f"LOG_FILE={raw_log_relative.as_posix()}",
             "-e",
             f"COMMANDS_FILE={commands_log_relative.as_posix()}",
             "-e",
             f"RUN_ID={manifest['run_id']}",
+            "--hostname",
+            socket.gethostname(),
             "--name",
             f"helm-path-{manifest['run_id']}",
             image_tag,
         ]
     )
     if command is not None:
-        docker_command.extend(["/usr/bin/zsh", "-ic", command])
+        docker_command.extend(["--workdir", "/workspace"])
+        docker_command.extend(["/usr/bin/bash", "--login", "-ic", command])
 
     console.print(
         Panel.fit(
             f"Challenge: [bold]{metadata['challenge_name']}[/bold]\n"
+            f"Vigil: [bold magenta]{manifest['vigil_name']}[/bold magenta]\n"
             f"Run ID: [bold cyan]{manifest['run_id']}[/bold cyan]\n"
             f"Recording to: [bold]{raw_log_relative.as_posix()}[/bold]",
             title="Recording Active",
@@ -301,10 +364,10 @@ def start(
     metadata["updated_at"] = stats["processed_at"]
     metadata["status"] = "recorded"
     save_challenge_metadata(challenge_path, metadata)
-    console.print(f"[bold green]Run captured:[/bold green] {manifest['run_id']}")
+    console.print(f"[bold green]Run captured:[/bold green] {manifest['run_id']} ({manifest['vigil_name']})")
 
 
-@app.command()
+@app.command(epilog=REPORT_EPILOG)
 def report(
     challenge_path: Path = typer.Argument(..., help="Path to an initialized challenge workspace"),
     run_id: str = typer.Option(None, "--run-id", help="Generate outputs from a single run"),
@@ -367,7 +430,7 @@ def report(
     console.print(f"[bold green]Report artifacts generated in[/bold green] {challenge_path / 'reports'}")
 
 
-@app.command()
+@app.command(epilog=VERIFY_EPILOG)
 def verify(
     challenge_path: Path = typer.Argument(..., help="Path to an initialized challenge workspace"),
     run_id: str = typer.Option(None, "--run-id", help="Verify a single run"),
@@ -391,7 +454,7 @@ def verify(
     console.print("[bold green]Verification passed[/bold green]")
 
 
-@app.command()
+@app.command(epilog=DOCTOR_EPILOG)
 def doctor(
     model: str = typer.Option(DEFAULT_MODEL, "--model", help="Model name to validate"),
 ):

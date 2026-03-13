@@ -21,7 +21,13 @@ from helm_path.constants import (
     GRAPH_MANIFEST_FILENAME,
     GRAPH_PROMPT_VERSION,
 )
-from helm_path.processing import calculate_file_hash, clean_sensitive_data, normalize_log_content, write_json_file
+from helm_path.processing import (
+    calculate_file_hash,
+    clean_sensitive_data,
+    normalize_hidden_markers,
+    normalize_log_content,
+    write_json_file,
+)
 from helm_path.workspace import graph_output_paths, list_run_directories, load_manifest, resolve_challenge_path, run_file_paths
 
 from helm_path.graph.models import CommandRecord, DiscoveryGraphBuilder, ParserResult
@@ -92,7 +98,8 @@ def segment_raw_log(raw_log: Path) -> dict[str, str]:
         return {}
     segments: dict[str, list[str]] = {}
     current_id: str | None = None
-    for line in raw_log.read_text(encoding="utf-8", errors="ignore").splitlines():
+    content = normalize_hidden_markers(raw_log.read_text(encoding="utf-8", errors="ignore"))
+    for line in content.splitlines():
         start_match = START_MARKER_RE.match(line)
         if start_match:
             current_id = start_match.group("command_id")

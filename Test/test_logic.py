@@ -3,15 +3,19 @@ from pathlib import Path
 from importlib.metadata import version as distribution_version
 
 import pytest
+from typer.testing import CliRunner
 
 from helm_path import __version__
 from helm_path.ai import extract_json, render_report_prompt
 from helm_path.audit import init_audit_db, record_run, verify_chain
+from helm_path.graph.cli import app as graph_app
+from helm_path.main import app as main_app
 from helm_path.main import select_run_dirs, verify_manifest_files
 from helm_path.processing import (
     build_clean_log,
     calculate_file_hash,
     clean_sensitive_data,
+    normalize_hidden_markers,
     write_json_file,
     write_report_manifest,
 )
@@ -23,6 +27,8 @@ from helm_path.workspace import (
     report_output_paths,
     run_file_paths,
 )
+
+runner = CliRunner()
 
 
 def test_init_challenge_workspace_creates_expected_layout(tmp_path):
@@ -42,6 +48,30 @@ def test_init_challenge_workspace_creates_expected_layout(tmp_path):
 
 def test_distribution_version_matches_runtime_version():
     assert distribution_version("helm-path") == __version__
+
+
+def test_create_run_layout_defaults_vigil_name_to_run_id(tmp_path):
+    challenge_path = init_challenge_workspace(tmp_path, "HTB", "Web", "Named")
+    metadata = load_challenge_metadata(challenge_path)
+
+    _, manifest = create_run_layout(challenge_path, metadata, image_tag="helm-path:lite", image_id="sha256:test")
+
+    assert manifest["vigil_name"] == manifest["run_id"]
+
+
+def test_create_run_layout_accepts_custom_vigil_name(tmp_path):
+    challenge_path = init_challenge_workspace(tmp_path, "HTB", "Web", "Named")
+    metadata = load_challenge_metadata(challenge_path)
+
+    _, manifest = create_run_layout(
+        challenge_path,
+        metadata,
+        image_tag="helm-path:lite",
+        image_id="sha256:test",
+        vigil_name="web enum night 1",
+    )
+
+    assert manifest["vigil_name"] == "web enum night 1"
 
 
 def test_clean_sensitive_data_and_log_processing(tmp_path):
@@ -210,19 +240,86 @@ def test_select_run_dirs_rejects_incomplete_specific_run(tmp_path):
     assert "incomplete" in str(exc_info.value).lower()
 
 
-def test_capture_dockerfiles_force_interactive_zsh():
+def test_capture_dockerfiles_force_interactive_bash():
     repo_root = Path(__file__).resolve().parents[1]
-    expected_bootstrap = 'script -f -q -c "/usr/bin/zsh -i" /workspace/${LOG_FILE:-sessions/default/raw.log}'
+    expected_bootstrap = 'script -f -q -c "/usr/bin/bash --login -i" /workspace/${LOG_FILE:-sessions/default/raw.log}'
 
     for dockerfile_name in ("Dockerfile.lite", "Dockerfile.kali"):
         content = (repo_root / "docker" / dockerfile_name).read_text(encoding="utf-8")
-        assert "ENV SHELL=/usr/bin/zsh" in content
+        assert "ENV SHELL=/usr/bin/bash" in content
         assert expected_bootstrap in content
-        assert "source /opt/helm-path/helm-path-hooks.zsh" in content
+        assert "source /opt/helm-path/helm-path-hooks.bash" in content
+        assert "ln -s /workspace /home/durk/workspace" in content
 
 
-def test_helm_path_hook_script_uses_lf_line_endings():
+def test_helm_path_hook_scripts_use_lf_line_endings():
     repo_root = Path(__file__).resolve().parents[1]
-    content = (repo_root / "docker" / "helm-path-hooks.zsh").read_bytes()
+    hook_paths = [
+        repo_root / "docker" / "helm-path-hooks.zsh",
+        repo_root / "docker" / "helm-path-hooks.bash",
+    ]
 
-    assert b"\r\n" not in content
+    for hook_path in hook_paths:
+        content = hook_path.read_bytes()
+        assert b"\r\n" not in content
+
+
+def test_normalize_hidden_markers_restores_plain_marker_lines():
+    content = "\x1b]0;__HELM_PATH_CMD_START__::run-1\x07nmap -sV 10.10.11.42\n\x1b]0;__HELM_PATH_CMD_END__::run-1::0\x07"
+
+    normalized = normalize_hidden_markers(content)
+
+    assert "__HELM_PATH_CMD_START__::run-1" in normalized
+    assert "__HELM_PATH_CMD_END__::run-1::0" in normalized
+
+
+def test_top_level_help_supports_h_and_shows_examples():
+    result = runner.invoke(main_app, ["-h"])
+
+    assert result.exit_code == 0
+    assert "--help" in result.stdout
+    assert "-h" in result.stdout
+    assert "Examples:" in result.stdout
+    assert 'helm-path init "HTB" Web "Flag Command Injection"' in result.stdout
+    assert "make install" in result.stdout
+    assert "make build-lite" in result.stdout
+
+
+def test_start_help_shows_examples():
+    result = runner.invoke(main_app, ["start", "-h"])
+
+    assert result.exit_code == 0
+    assert "Examples:" in result.stdout
+    assert "--name" in result.stdout
+    assert "web enum" in result.stdout
+    assert "night 1" in result.stdout
+    assert "id &&" in result.stdout
+    assert "whoami" in result.stdout
+
+
+def test_graph_help_supports_h_and_shows_examples():
+    result = runner.invoke(graph_app, ["-h"])
+
+    assert result.exit_code == 0
+    assert "--help" in result.stdout
+    assert "-h" in result.stdout
+    assert "Examples:" in result.stdout
+    assert "helm-path graph build" in result.stdout
+
+
+def test_doctor_help_includes_setup_checklist():
+    result = runner.invoke(main_app, ["doctor", "-h"])
+
+    assert result.exit_code == 0
+    assert "Setup Checklist:" in result.stdout
+    assert "make install" in result.stdout
+    assert "build-full" in result.stdout
+
+
+def test_makefile_includes_install_targets():
+    repo_root = Path(__file__).resolve().parents[1]
+    content = (repo_root / "Makefile").read_text(encoding="utf-8")
+
+    assert ".PHONY: install dev-install" in content
+    assert "install:" in content
+    assert "dev-install:" in content

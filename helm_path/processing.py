@@ -10,6 +10,9 @@ from typing import Any
 from helm_path.constants import COMMAND_MARKER_END, COMMAND_MARKER_START
 
 ANSI_ESCAPE = re.compile(r"\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])")
+OSC_MARKER_SEQUENCE = re.compile(
+    rf"\x1b\]0;((?:{re.escape(COMMAND_MARKER_START)}|{re.escape(COMMAND_MARKER_END)})::.*?)(?:\x07|\x1b\\)"
+)
 NOISE_PATTERNS = [
     re.compile(r"^\s*$"),
     re.compile(r"^Script started on .*"),
@@ -46,8 +49,13 @@ def clean_sensitive_data(content: str) -> tuple[str, int]:
     return cleaned, redactions
 
 
+def normalize_hidden_markers(content: str) -> str:
+    return OSC_MARKER_SEQUENCE.sub(lambda match: f"\n{match.group(1)}\n", content)
+
+
 def normalize_log_content(content: str) -> tuple[str, int]:
-    without_ansi = ANSI_ESCAPE.sub("", content)
+    with_normalized_markers = normalize_hidden_markers(content)
+    without_ansi = ANSI_ESCAPE.sub("", with_normalized_markers)
     filtered_lines: list[str] = []
     removed = 0
     for line in without_ansi.splitlines():

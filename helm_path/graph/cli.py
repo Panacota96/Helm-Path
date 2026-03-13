@@ -12,11 +12,35 @@ from helm_path.graph.build import select_run_dirs, write_graph_artifacts
 from helm_path.graph.server import serve_graph_dir
 from helm_path.workspace import graph_output_paths, resolve_challenge_path
 
-app = typer.Typer(help="Build and inspect discovery graphs for challenge workspaces")
+GRAPH_HELP = "Build and inspect discovery graphs for challenge workspaces"
+GRAPH_EPILOG = """Examples:
+  helm-path graph build challenges/htb/web/flag-command-injection
+  helm-path graph serve challenges/htb/web/flag-command-injection
+  helm-path graph export challenges/htb/web/flag-command-injection --format json
+"""
+GRAPH_BUILD_EPILOG = """Examples:
+  helm-path graph build challenges/htb/web/flag-command-injection
+  helm-path graph build challenges/htb/web/flag-command-injection --all-runs
+  helm-path graph build challenges/htb/web/flag-command-injection --run-id 20260313-020136-abcd12
+"""
+GRAPH_SERVE_EPILOG = """Examples:
+  helm-path graph serve challenges/htb/web/flag-command-injection
+  helm-path graph serve challenges/htb/web/flag-command-injection --host 0.0.0.0 --port 9000
+"""
+GRAPH_EXPORT_EPILOG = """Examples:
+  helm-path graph export challenges/htb/web/flag-command-injection
+  helm-path graph export challenges/htb/web/flag-command-injection --format json
+"""
+
+app = typer.Typer(
+    help=GRAPH_HELP,
+    epilog=GRAPH_EPILOG,
+    context_settings={"help_option_names": ["-h", "--help"]},
+)
 console = Console()
 
 
-@app.command("build")
+@app.command("build", epilog=GRAPH_BUILD_EPILOG)
 def build_graph(
     challenge_path: Path = typer.Argument(..., help="Path to an initialized challenge workspace"),
     run_id: str = typer.Option(None, "--run-id", help="Build from a single run"),
@@ -29,7 +53,7 @@ def build_graph(
     console.print(f"Runs: {', '.join(manifest['run_ids'])}")
 
 
-@app.command("serve")
+@app.command("serve", epilog=GRAPH_SERVE_EPILOG)
 def serve_graph(
     challenge_path: Path = typer.Argument(..., help="Path to an initialized challenge workspace"),
     host: str = typer.Option("127.0.0.1", "--host", help="Bind host"),
@@ -49,7 +73,7 @@ def serve_graph(
             console.print("\n[bold yellow]Graph server stopped.[/bold yellow]")
 
 
-@app.command("export")
+@app.command("export", epilog=GRAPH_EXPORT_EPILOG)
 def export_graph(
     challenge_path: Path = typer.Argument(..., help="Path to an initialized challenge workspace"),
     format: str = typer.Option("json", "--format", help="Export format"),

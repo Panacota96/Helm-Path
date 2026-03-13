@@ -94,14 +94,29 @@ def save_challenge_metadata(challenge_path: Path, metadata: dict[str, Any]) -> N
     (challenge_path / METADATA_FILENAME).write_text(json.dumps(metadata, indent=2), encoding="utf-8")
 
 
-def create_run_layout(challenge_path: Path, metadata: dict[str, Any], image_tag: str, image_id: str) -> tuple[Path, dict[str, Any]]:
+def resolve_vigil_name(vigil_name: str | None, run_id: str) -> str:
+    if vigil_name is None:
+        return run_id
+    normalized = vigil_name.strip()
+    return normalized or run_id
+
+
+def create_run_layout(
+    challenge_path: Path,
+    metadata: dict[str, Any],
+    image_tag: str,
+    image_id: str,
+    vigil_name: str | None = None,
+) -> tuple[Path, dict[str, Any]]:
     run_id = f"{datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:6]}"
     run_dir = challenge_path / "sessions" / run_id
     run_dir.mkdir(parents=True, exist_ok=False)
+    resolved_vigil_name = resolve_vigil_name(vigil_name, run_id)
     manifest = {
         "schema_version": 1,
         "challenge_id": metadata["challenge_id"],
         "run_id": run_id,
+        "vigil_name": resolved_vigil_name,
         "captured_at": {"start": utc_now(), "end": None},
         "environment": {
             "image_tag": image_tag,

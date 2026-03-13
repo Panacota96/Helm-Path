@@ -2,7 +2,17 @@ SHELL := /bin/bash
 
 PYTHON ?= python
 
-.PHONY: test compile smoke ci build-lite build-full clean
+.PHONY: install dev-install test compile smoke ci build-lite build-full clean
+
+install:
+	$(PYTHON) -m pip install --upgrade pip
+	$(PYTHON) -m pip install -r requirements.txt
+	$(PYTHON) -m pip install .
+
+dev-install:
+	$(PYTHON) -m pip install --upgrade pip
+	$(PYTHON) -m pip install -r requirements.txt
+	$(PYTHON) -m pip install -e ".[dev]"
 
 test:
 	$(PYTHON) -m pytest -q

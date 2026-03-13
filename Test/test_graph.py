@@ -89,6 +89,20 @@ def test_load_command_records_and_segment_raw_log(tmp_path):
     assert "OpenSSH 8.2p1" in segments["run-1-1"]
 
 
+def test_segment_raw_log_supports_hidden_marker_sequences(tmp_path):
+    raw_log = tmp_path / "raw.log"
+    raw_log.write_text(
+        "\x1b]0;__HELM_PATH_CMD_START__::run-1-1\x07"
+        "22/tcp open ssh OpenSSH 8.2p1 Ubuntu 4ubuntu0.5\n"
+        "\x1b]0;__HELM_PATH_CMD_END__::run-1-1::0\x07",
+        encoding="utf-8",
+    )
+
+    segments = segment_raw_log(raw_log)
+
+    assert "OpenSSH 8.2p1" in segments["run-1-1"]
+
+
 def test_core_parsers_extract_expected_observations(tmp_path):
     xml_file = tmp_path / "scan.xml"
     xml_file.write_text(

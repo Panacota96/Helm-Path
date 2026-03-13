@@ -1,9 +1,10 @@
 FROM kalilinux/kali-rolling
 
 ENV DEBIAN_FRONTEND=noninteractive
-ENV SHELL=/usr/bin/zsh
+ENV SHELL=/usr/bin/bash
 
 COPY docker/helm-path-hooks.zsh /opt/helm-path/helm-path-hooks.zsh
+COPY docker/helm-path-hooks.bash /opt/helm-path/helm-path-hooks.bash
 
 RUN echo "wireshark-common wireshark-common/install-setuid boolean true" | debconf-set-selections
 
@@ -72,7 +73,7 @@ RUN ln -s /opt/tools/pspy64 /usr/local/bin/pspy && \
     ln -s /opt/tools/PEASS-ng/linpeas.sh /usr/local/bin/linpeas
 
 # Create a non-root user 'durk'
-RUN useradd -m -s /usr/bin/zsh durk && \
+RUN useradd -m -s /usr/bin/bash durk && \
     echo "durk ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/durk && \
     chmod 0440 /etc/sudoers.d/durk
 
@@ -80,25 +81,14 @@ RUN useradd -m -s /usr/bin/zsh durk && \
 USER durk
 WORKDIR /home/durk
 
-# Install Oh-My-Zsh for the Chronicler's interface (User Level)
-RUN sh -c "$(curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh)" "" --unattended
-
-# Install Zsh Plugins (Autosuggestions & Syntax Highlighting)
-RUN git clone https://github.com/zsh-users/zsh-autosuggestions ${ZSH_CUSTOM:-~/.oh-my-zsh/custom}/plugins/zsh-autosuggestions && \
-    git clone https://github.com/zsh-users/zsh-syntax-highlighting.git ${ZSH_CUSTOM:-~/.oh-my-zsh/custom}/plugins/zsh-syntax-highlighting
-
-# Enable Plugins in .zshrc
-RUN sed -i 's/plugins=(git)/plugins=(git zsh-autosuggestions zsh-syntax-highlighting)/' ~/.zshrc
-
 # Configure capture workspace
 USER root
-RUN mkdir -p /workspace && chown durk:durk /workspace
+RUN mkdir -p /workspace && chown durk:durk /workspace && ln -s /workspace /home/durk/workspace
 USER durk
 
-RUN echo 'if [ "${SCRIPT_LOGGED:-0}" != "1" ]; then export SCRIPT_LOGGED=1; script -f -q -c "/usr/bin/zsh -i" /workspace/${LOG_FILE:-sessions/default/raw.log}; exit; fi' >> /home/durk/.zshrc
-RUN echo 'source /opt/helm-path/helm-path-hooks.zsh' >> /home/durk/.zshrc
+RUN printf '%s\n' \
+    'if [ "${SCRIPT_LOGGED:-0}" != "1" ]; then export SCRIPT_LOGGED=1; script -f -q -c "/usr/bin/bash --login -i" /workspace/${LOG_FILE:-sessions/default/raw.log}; exit; fi' \
+    'source /opt/helm-path/helm-path-hooks.bash' \
+    >> /home/durk/.bashrc
 
-RUN echo 'echo -e "\n\033[1;33mHelm-Path full capture environment ready.\033[0m"' >> /home/durk/.zshrc
-RUN echo 'echo -e "\033[1;34mLocal capture is active. AI runs on the host.\033[0m\n"' >> /home/durk/.zshrc
-
-CMD ["/usr/bin/zsh"]
+CMD ["/usr/bin/bash", "-i"]
