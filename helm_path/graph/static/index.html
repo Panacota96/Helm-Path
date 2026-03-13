@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Helm-Path Discovery Graph</title>
+  <link rel="stylesheet" href="assets/vis-network.min.css">
+  <link rel="stylesheet" href="assets/graph.css">
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar">
+      <h1>Discovery Graph</h1>
+      <div class="control-group">
+        <label for="search">Search</label>
+        <input id="search" type="search" placeholder="IP, hostname, product, version">
+      </div>
+      <div class="control-group">
+        <label for="run-filter">Run</label>
+        <select id="run-filter"></select>
+      </div>
+      <div class="control-group">
+        <label for="type-filter">Node Type</label>
+        <select id="type-filter"></select>
+      </div>
+      <div class="control-group">
+        <label for="parser-filter">Parser</label>
+        <select id="parser-filter"></select>
+      </div>
+      <div class="control-group">
+        <label for="confidence-filter">Minimum Confidence</label>
+        <input id="confidence-filter" type="range" min="0" max="1" step="0.1" value="0">
+        <span id="confidence-value">0.0</span>
+      </div>
+      <div class="control-group toggle">
+        <label for="physics-toggle">Enable Physics</label>
+        <input id="physics-toggle" type="checkbox">
+      </div>
+      <button id="reset-filters" type="button">Reset Filters</button>
+      <div id="summary" class="summary"></div>
+    </aside>
+    <main class="graph-panel">
+      <div id="network"></div>
+    </main>
+    <aside class="details-panel">
+      <h2>Details</h2>
+      <div id="details-content">Select a node or edge to inspect evidence.</div>
+    </aside>
+  </div>
+
+  <script src="assets/vis-network.min.js"></script>
+  <script src="assets/app.js"></script>
+</body>
+</html>

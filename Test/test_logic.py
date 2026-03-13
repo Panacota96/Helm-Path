@@ -26,6 +26,7 @@ def test_init_challenge_workspace_creates_expected_layout(tmp_path):
     assert (challenge_path / ".metadata.json").exists()
     assert (challenge_path / "sessions").is_dir()
     assert (challenge_path / "reports").is_dir()
+    assert (challenge_path / "graph").is_dir()
     assert (challenge_path / "notes" / "FAILURES.md").exists()
     assert (challenge_path / "notes" / "WORKING_NOTES.md").exists()
     metadata = load_challenge_metadata(challenge_path)
@@ -103,9 +104,11 @@ def test_audit_chain_detects_manifest_tampering(tmp_path):
 
     paths["raw_log"].write_text("nc target 31337\n", encoding="utf-8")
     paths["clean_log"].write_text("nc target 31337\n", encoding="utf-8")
+    paths["commands_log"].write_text("", encoding="utf-8")
     manifest["captured_at"]["end"] = "2026-03-13T10:00:00+00:00"
     manifest["hashes"]["raw_log"] = calculate_file_hash(paths["raw_log"])
     manifest["hashes"]["clean_log"] = calculate_file_hash(paths["clean_log"])
+    manifest["hashes"]["commands_log"] = calculate_file_hash(paths["commands_log"])
     write_json_file(paths["manifest"], manifest)
 
     db_path = challenge_path / ".ffr" / "audit.db"

@@ -15,11 +15,13 @@ from helm_path.constants import (
     APP_NAME,
     AUDIT_DB_FILENAME,
     CHALLENGES_DIRNAME,
+    COMMAND_LOG_FILENAME,
     DEFAULT_MODEL,
     FULL_IMAGE_TAG,
     LITE_IMAGE_TAG,
     REPORT_MANIFEST_FILENAME,
 )
+from helm_path.graph.cli import app as graph_app
 from helm_path.processing import (
     build_clean_log,
     calculate_file_hash,
@@ -29,8 +31,10 @@ from helm_path.processing import (
 from helm_path.workspace import (
     create_run_layout,
     ensure_challenge_workspace,
+    graph_output_paths,
     init_challenge_workspace,
     list_run_directories,
+    load_graph_manifest,
     load_manifest,
     load_report_manifest,
     report_output_paths,
@@ -43,6 +47,7 @@ docker = None
 pypandoc = None
 
 app = typer.Typer(help="Helm-Path: local-first CTF flight recorder and writeup generator")
+app.add_typer(graph_app, name="graph")
 console = Console()
 
 
@@ -102,6 +107,8 @@ def verify_manifest_files(challenge_path: Path, run_dirs: list[Path]) -> list[st
             "clean log": paths["clean_log"],
             "manifest": paths["manifest"],
         }
+        if manifest.get("files", {}).get("commands_log") or manifest.get("hashes", {}).get("commands_log") is not None:
+            required["commands log"] = paths["commands_log"]
         missing = False
         for label, path in required.items():
             if not path.exists():
@@ -115,6 +122,10 @@ def verify_manifest_files(challenge_path: Path, run_dirs: list[Path]) -> list[st
             findings.append(f"Hash mismatch for raw log in run {manifest['run_id']}.")
         if clean_hash != manifest["hashes"]["clean_log"]:
             findings.append(f"Hash mismatch for clean log in run {manifest['run_id']}.")
+        if manifest.get("hashes", {}).get("commands_log") is not None:
+            commands_hash = calculate_file_hash(paths["commands_log"])
+            if commands_hash != manifest["hashes"].get("commands_log"):
+                findings.append(f"Hash mismatch for commands log in run {manifest['run_id']}.")
     return findings
 
 
@@ -144,6 +155,23 @@ def verify_report_outputs(challenge_path: Path) -> list[str]:
             continue
         if path.exists() and path not in tracked:
             findings.append(f"Orphaned report output not referenced by report manifest: {path}")
+    return findings
+
+
+def verify_graph_outputs(challenge_path: Path) -> list[str]:
+    findings: list[str] = []
+    graph_manifest = load_graph_manifest(challenge_path)
+    if not graph_manifest:
+        return findings
+    output_paths = graph_output_paths(challenge_path)
+    for filename, expected_hash in graph_manifest.get("outputs", {}).items():
+        path = challenge_path / "graph" / filename
+        if not path.exists():
+            findings.append(f"Missing graph output referenced in graph manifest: {path}")
+            continue
+        actual_hash = calculate_file_hash(path)
+        if actual_hash != expected_hash:
+            findings.append(f"Hash mismatch for graph output {filename}.")
     return findings
 
 
@@ -185,7 +213,10 @@ def start(
     image = build_image_if_needed(client, image_tag, lite)
 
     _, manifest = create_run_layout(challenge_path, metadata, image_tag=image_tag, image_id=image.id)
+    paths = run_file_paths(challenge_path, manifest["run_id"])
+    paths["commands_log"].touch()
     raw_log_relative = Path("sessions") / manifest["run_id"] / "raw.log"
+    commands_log_relative = Path("sessions") / manifest["run_id"] / COMMAND_LOG_FILENAME
     docker_command = [
         "docker",
         "run",
@@ -197,6 +228,10 @@ def start(
         "/workspace",
         "-e",
         f"LOG_FILE={raw_log_relative.as_posix()}",
+        "-e",
+        f"COMMANDS_FILE={commands_log_relative.as_posix()}",
+        "-e",
+        f"RUN_ID={manifest['run_id']}",
         "--name",
         f"helm-path-{manifest['run_id']}",
         image_tag,
@@ -213,7 +248,6 @@ def start(
 
     subprocess.run(docker_command, check=False)
 
-    paths = run_file_paths(challenge_path, manifest["run_id"])
     if not paths["raw_log"].exists():
         console.print("[bold red]No raw log was captured. The container likely exited before the recorder started.[/bold red]")
         raise typer.Exit(1)
@@ -222,6 +256,7 @@ def start(
     manifest["captured_at"]["end"] = stats["processed_at"]
     manifest["hashes"]["raw_log"] = calculate_file_hash(paths["raw_log"])
     manifest["hashes"]["clean_log"] = calculate_file_hash(paths["clean_log"])
+    manifest["hashes"]["commands_log"] = calculate_file_hash(paths["commands_log"])
     manifest["processing"] = stats
     write_json_file(paths["manifest"], manifest)
 
@@ -313,8 +348,9 @@ def verify(
     audit_findings = verify_chain(challenge_path / ".ffr" / AUDIT_DB_FILENAME)
     manifest_findings = verify_manifest_files(challenge_path, run_dirs)
     report_findings = verify_report_outputs(challenge_path)
+    graph_findings = verify_graph_outputs(challenge_path)
 
-    findings = audit_findings + manifest_findings + report_findings
+    findings = audit_findings + manifest_findings + report_findings + graph_findings
     if findings:
         console.print("[bold red]Verification failed[/bold red]")
         for finding in findings:

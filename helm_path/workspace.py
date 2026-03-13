@@ -9,7 +9,13 @@ from typing import Any
 
 from helm_path.constants import (
     AUDIT_DIRNAME,
+    COMMAND_LOG_FILENAME,
     FAILURES_FILENAME,
+    GRAPH_COMMANDS_FILENAME,
+    GRAPH_DIRNAME,
+    GRAPH_HTML_FILENAME,
+    GRAPH_JSON_FILENAME,
+    GRAPH_MANIFEST_FILENAME,
     METADATA_FILENAME,
     REPORT_MANIFEST_FILENAME,
     WORKING_NOTES_FILENAME,
@@ -44,6 +50,7 @@ def init_challenge_workspace(root: Path, competition: str, category: str, challe
     for path in (
         challenge_path / "sessions",
         challenge_path / "reports",
+        challenge_path / GRAPH_DIRNAME,
         challenge_path / "notes",
         challenge_path / "artifacts",
         challenge_path / AUDIT_DIRNAME,
@@ -104,9 +111,10 @@ def create_run_layout(challenge_path: Path, metadata: dict[str, Any], image_tag:
         "files": {
             "raw_log": f"sessions/{run_id}/raw.log",
             "clean_log": f"sessions/{run_id}/clean.log",
+            "commands_log": f"sessions/{run_id}/{COMMAND_LOG_FILENAME}",
             "manifest": f"sessions/{run_id}/manifest.json",
         },
-        "hashes": {"raw_log": None, "clean_log": None},
+        "hashes": {"raw_log": None, "clean_log": None, "commands_log": None},
         "processing": {},
     }
     return run_dir, manifest
@@ -123,6 +131,7 @@ def run_file_paths(challenge_path: Path, run_id: str) -> dict[str, Path]:
         "run_dir": run_dir,
         "raw_log": run_dir / "raw.log",
         "clean_log": run_dir / "clean.log",
+        "commands_log": run_dir / COMMAND_LOG_FILENAME,
         "manifest": run_dir / "manifest.json",
     }
 
@@ -146,6 +155,24 @@ def report_output_paths(challenge_path: Path) -> dict[str, Path]:
 
 def load_report_manifest(challenge_path: Path) -> dict[str, Any] | None:
     path = report_output_paths(challenge_path)[REPORT_MANIFEST_FILENAME]
+    if not path.exists():
+        return None
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def graph_output_paths(challenge_path: Path) -> dict[str, Path]:
+    graph_dir = resolve_challenge_path(challenge_path) / GRAPH_DIRNAME
+    return {
+        GRAPH_JSON_FILENAME: graph_dir / GRAPH_JSON_FILENAME,
+        GRAPH_COMMANDS_FILENAME: graph_dir / GRAPH_COMMANDS_FILENAME,
+        GRAPH_MANIFEST_FILENAME: graph_dir / GRAPH_MANIFEST_FILENAME,
+        GRAPH_HTML_FILENAME: graph_dir / GRAPH_HTML_FILENAME,
+        "assets_dir": graph_dir / "assets",
+    }
+
+
+def load_graph_manifest(challenge_path: Path) -> dict[str, Any] | None:
+    path = graph_output_paths(challenge_path)[GRAPH_MANIFEST_FILENAME]
     if not path.exists():
         return None
     return json.loads(path.read_text(encoding="utf-8"))
